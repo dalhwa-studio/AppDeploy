@@ -395,6 +395,48 @@ function setupApiKeyForAltool(keyId, privateKeyPath) {
 }
 
 /**
+ * Get the current review/version status for an app.
+ * Returns the latest version's state.
+ */
+export async function getVersionStatus(jwt, appId) {
+  // Check for any active version (all non-ready states)
+  const data = await apiRequest(jwt, 'GET',
+    `/v1/apps/${appId}/appStoreVersions?filter[platform]=IOS&sort=-createdDate&limit=1`
+  );
+
+  const version = data?.data?.[0];
+  if (!version) return null;
+
+  return {
+    versionId: version.id,
+    versionString: version.attributes.versionString,
+    state: version.attributes.appStoreState,
+    createdDate: version.attributes.createdDate,
+  };
+}
+
+/**
+ * Map App Store version state to a user-friendly status.
+ */
+export function mapAppStoreState(state) {
+  const stateMap = {
+    PREPARE_FOR_SUBMISSION: { status: 'draft', label: '제출 준비 중' },
+    WAITING_FOR_REVIEW: { status: 'in_review', label: '심사 대기 중' },
+    IN_REVIEW: { status: 'in_review', label: '심사 중' },
+    PENDING_DEVELOPER_RELEASE: { status: 'approved', label: '개발자 출시 대기' },
+    PROCESSING_FOR_APP_STORE: { status: 'processing', label: '처리 중' },
+    READY_FOR_SALE: { status: 'published', label: '출시됨' },
+    REJECTED: { status: 'rejected', label: '거부됨' },
+    METADATA_REJECTED: { status: 'rejected', label: '메타데이터 거부됨' },
+    REMOVED_FROM_SALE: { status: 'removed', label: '판매 중단' },
+    DEVELOPER_REJECTED: { status: 'draft', label: '개발자 거부' },
+    DEVELOPER_REMOVED_FROM_SALE: { status: 'removed', label: '개발자 판매 중단' },
+    INVALID_BINARY: { status: 'failed', label: '잘못된 바이너리' },
+  };
+  return stateMap[state] || { status: 'unknown', label: state };
+}
+
+/**
  * Parse Apple API errors into user-friendly messages.
  */
 export function parseAppleApiError(err) {

@@ -81,3 +81,28 @@ export async function deleteEdit(client, packageName, editId) {
     // Best effort cleanup — edit may have expired
   }
 }
+
+/**
+ * Get current release status for a track.
+ * Returns the latest release's status and version codes.
+ */
+export async function getTrackStatus(client, packageName, track) {
+  const editId = await createEdit(client, packageName);
+  try {
+    const res = await client.edits.tracks.get({ packageName, editId, track });
+    const releases = res.data.releases || [];
+    const latest = releases[0];
+    await deleteEdit(client, packageName, editId);
+    if (!latest) return null;
+    return {
+      track: res.data.track,
+      status: latest.status, // completed, inProgress, draft, halted
+      versionCodes: latest.versionCodes || [],
+      name: latest.name || '',
+      releaseNotes: latest.releaseNotes || [],
+    };
+  } catch (err) {
+    await deleteEdit(client, packageName, editId);
+    throw err;
+  }
+}

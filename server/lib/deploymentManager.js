@@ -71,6 +71,12 @@ export async function deployToGooglePlay({
       status: 'completed',
       versionCode,
       message: `Google Play (${track} 트랙)에 성공적으로 배포되었습니다.`,
+      pollingConfig: {
+        store: 'google_play',
+        credentialId,
+        packageName,
+        track,
+      },
     };
     deployments.set(deploymentId, finalState);
     if (io && socketId) {
@@ -205,6 +211,11 @@ export async function deployToAppStore({
       status: 'completed',
       versionString,
       message: `App Store에 v${versionString} 심사가 제출되었습니다.`,
+      pollingConfig: {
+        store: 'app_store',
+        credentialId,
+        bundleId,
+      },
     };
     deployments.set(deploymentId, finalState);
     if (io && socketId) {

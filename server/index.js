@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt } from './lib/credentialManager.js';
 import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib/deploymentManager.js';
+import { startPolling, stopPolling, getActivePollers } from './lib/statusPoller.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -328,6 +329,36 @@ app.post('/api/deploy/apple', async (req, res) => {
   }, io, socketId).catch(err => {
     console.error('[App Store Deploy Error]', err.message);
   });
+});
+
+// ─── Start Status Polling ───
+app.post('/api/deploy/poll', (req, res) => {
+  const { pollingId, store, credentialId, packageName, bundleId, track } = req.body;
+
+  if (!store || !credentialId) {
+    return res.json({ success: false, error: '스토어 타입과 자격증명이 필요합니다.' });
+  }
+
+  const config = store === 'google_play'
+    ? { credentialId, packageName, track: track || 'internal' }
+    : { credentialId, bundleId };
+
+  const id = pollingId || crypto.randomUUID();
+
+  startPolling({ pollingId: id, store, config, encryptionKey: ENCRYPTION_KEY }, io);
+
+  res.json({ success: true, pollingId: id, message: '상태 폴링이 시작되었습니다.' });
+});
+
+// ─── Stop Status Polling ───
+app.delete('/api/deploy/poll/:pollingId', (req, res) => {
+  stopPolling(req.params.pollingId);
+  res.json({ success: true, message: '폴링이 중지되었습니다.' });
+});
+
+// ─── Get Active Pollers ───
+app.get('/api/deploy/poll', (req, res) => {
+  res.json({ success: true, pollers: getActivePollers() });
 });
 
 // ─── Screenshots save ───

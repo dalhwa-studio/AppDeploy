@@ -182,6 +182,7 @@ export default function BuildReleaseTab() {
   const [isDeploying, setIsDeploying] = useState(null);
   const [deployProgress, setDeployProgress] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [storeStatus, setStoreStatus] = useState({});
   const socketRef = useRef(null);
 
   // Socket.IO connection
@@ -199,12 +200,25 @@ export default function BuildReleaseTab() {
         setDeployProgress(null);
         setIsDeploying(null);
       }, 2000);
+
+      // Auto-start status polling after deployment completes
+      if (data.pollingConfig) {
+        fetch(`${API_BASE}/deploy/poll`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data.pollingConfig),
+        }).catch(() => {});
+      }
     });
 
     socket.on('deploy:error', (data) => {
       setDeployProgress(null);
       setIsDeploying(null);
       addToast(`배포 실패 (${DEPLOY_STEPS[data.step] || data.step}): ${data.error}`, 'error');
+    });
+
+    socket.on('deploy:status', (data) => {
+      setStoreStatus(prev => ({ ...prev, [data.store]: data }));
     });
 
     return () => {
@@ -499,6 +513,11 @@ export default function BuildReleaseTab() {
                     ? `✅ 연결됨 · 트랙: ${currentApp.googlePlay?.track || 'internal'}`
                     : '❌ 미연결'}
                 </div>
+                {storeStatus.google_play && (
+                  <div style={{ fontSize: '0.6875rem', color: 'var(--accent-primary)', marginTop: 2 }}>
+                    📡 {storeStatus.google_play.label}
+                  </div>
+                )}
               </div>
               {androidBuild && (
                 <span className="badge badge-google">Ready</span>
@@ -519,6 +538,11 @@ export default function BuildReleaseTab() {
                     ? `✅ 연결됨 · Key: ${storeAccounts.appStore.keyId}`
                     : '❌ 미연결'}
                 </div>
+                {storeStatus.app_store && (
+                  <div style={{ fontSize: '0.6875rem', color: 'var(--accent-primary)', marginTop: 2 }}>
+                    📡 {storeStatus.app_store.label}
+                  </div>
+                )}
               </div>
               {iosBuild && (
                 <span className="badge badge-apple">Ready</span>
