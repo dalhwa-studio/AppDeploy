@@ -1,15 +1,16 @@
 import React, { useCallback, useState } from 'react';
 import {
   FileText, Link2, Hash, Image as ImageIcon,
-  Upload, X, GripVertical
+  Upload, X, GripVertical, CloudUpload, PlayCircle, Apple, Loader2
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import CharCounter from '../common/CharCounter';
-import { FIELD_LIMITS, CATEGORIES } from '../../utils/constants';
+import { FIELD_LIMITS, CATEGORIES, API_BASE } from '../../utils/constants';
 
 export default function SharedMetaTab() {
-  const { currentApp, dispatch, addToast } = useApp();
+  const { currentApp, dispatch, addToast, storeAccounts } = useApp();
   const shared = currentApp?.shared || {};
+  const [syncing, setSyncing] = useState(null);
 
   const updateField = useCallback((path, value) => {
     dispatch({
@@ -297,6 +298,93 @@ export default function SharedMetaTab() {
               min={1}
               style={{ fontFamily: 'var(--font-mono)' }}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Metadata Sync to Store */}
+      <div className="section">
+        <div className="section-header">
+          <CloudUpload size={18} className="icon" />
+          <h3>메타데이터 스토어 동기화</h3>
+        </div>
+        <div className="glass-card" style={{ padding: 'var(--space-md)' }}>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
+            현재 입력된 메타데이터를 배포 없이 스토어에 직접 업데이트합니다.
+          </div>
+          <div className="flex items-center gap-md" style={{ flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={syncing || !storeAccounts.googlePlay || !currentApp.androidPackageName}
+              onClick={async () => {
+                setSyncing('google');
+                try {
+                  const res = await fetch(`${API_BASE}/sync/metadata/store`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      store: 'google_play',
+                      credentialId: storeAccounts.googlePlay.credentialId,
+                      packageName: currentApp.androidPackageName,
+                      metadata: {
+                        title: shared.appName,
+                        shortDescription: currentApp.googlePlay?.shortDescription,
+                        fullDescription: shared.description,
+                      },
+                    }),
+                  });
+                  const result = await res.json();
+                  addToast(result.success ? result.message : result.error, result.success ? 'success' : 'error');
+                } catch (err) {
+                  addToast(`동기화 실패: ${err.message}`, 'error');
+                }
+                setSyncing(null);
+              }}
+            >
+              {syncing === 'google' ? <Loader2 size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> : <PlayCircle size={14} />}
+              Google Play 동기화
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={syncing || !storeAccounts.appStore || !currentApp.iosBundleId}
+              onClick={async () => {
+                setSyncing('apple');
+                try {
+                  const res = await fetch(`${API_BASE}/sync/metadata/store`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      store: 'app_store',
+                      credentialId: storeAccounts.appStore.credentialId,
+                      bundleId: currentApp.iosBundleId,
+                      metadata: {
+                        versionString: shared.versionName,
+                        description: shared.description,
+                        keywords: currentApp.appStore?.keywords,
+                        whatsNew: currentApp.appStore?.whatsNew,
+                        promotionalText: currentApp.appStore?.promotionalText,
+                        marketingUrl: currentApp.appStore?.marketingUrl,
+                      },
+                    }),
+                  });
+                  const result = await res.json();
+                  addToast(result.success ? result.message : result.error, result.success ? 'success' : 'error');
+                } catch (err) {
+                  addToast(`동기화 실패: ${err.message}`, 'error');
+                }
+                setSyncing(null);
+              }}
+            >
+              {syncing === 'apple' ? <Loader2 size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> : <Apple size={14} />}
+              App Store 동기화
+            </button>
+
+            {!storeAccounts.googlePlay && !storeAccounts.appStore && (
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                스토어 계정을 먼저 연결해 주세요.
+              </span>
+            )}
           </div>
         </div>
       </div>

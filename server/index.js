@@ -11,6 +11,7 @@ import multer from 'multer';
 import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt } from './lib/credentialManager.js';
 import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib/deploymentManager.js';
 import { startPolling, stopPolling, getActivePollers } from './lib/statusPoller.js';
+import { syncMetadataToGoogle, syncMetadataToApple } from './lib/metadataSync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -228,6 +229,31 @@ app.post('/api/sync/metadata', (req, res) => {
     });
   } catch (err) {
     console.error('[Metadata Sync Error]', err);
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Metadata Sync to Store (actual API upload) ───
+app.post('/api/sync/metadata/store', async (req, res) => {
+  const { store, credentialId, packageName, bundleId, metadata } = req.body;
+
+  if (!store || !credentialId) {
+    return res.json({ success: false, error: '스토어 타입과 자격증명이 필요합니다.' });
+  }
+
+  try {
+    let result;
+    if (store === 'google_play') {
+      result = await syncMetadataToGoogle({ credentialId, packageName, metadata, encryptionKey: ENCRYPTION_KEY });
+    } else if (store === 'app_store') {
+      result = await syncMetadataToApple({ credentialId, bundleId, metadata, encryptionKey: ENCRYPTION_KEY });
+    } else {
+      return res.json({ success: false, error: '지원하지 않는 스토어 타입입니다.' });
+    }
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[Metadata Store Sync Error]', err);
     res.json({ success: false, error: err.message });
   }
 });
