@@ -2,12 +2,13 @@ import React from 'react';
 import {
   Rocket, LayoutGrid, Settings, ArrowLeft,
   Smartphone, FileText, Image as ImageIcon,
-  ShoppingBag, Upload, Apple, PlayCircle, Globe
+  ShoppingBag, Upload, Apple, PlayCircle, Globe, Languages
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 
 const DETAIL_TABS = [
   { id: 'shared', label: '공통 정보', icon: FileText },
+  { id: 'localization', label: '로컬라이제이션 & ASO', icon: Languages },
   { id: 'google', label: 'Google Play', icon: PlayCircle },
   { id: 'apple', label: 'App Store', icon: Apple },
   { id: 'build', label: 'Build & Release', icon: Upload },

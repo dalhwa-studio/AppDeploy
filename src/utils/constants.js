@@ -159,6 +159,10 @@ export const DEFAULT_APP = {
     appStore: null,
   },
   deployments: [],
+  // ─── Localization ───
+  defaultLocale: 'ko-KR',
+  targetLocales: [],           // e.g. ['en-US','ja-JP']
+  locales: {},                 // { 'en-US': { title, subtitle, description, keywords, promotionalText, whatsNew, shortDescription, generatedAt, generatedBy, edited } }
   createdAt: null,
   updatedAt: null,
 };

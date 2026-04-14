@@ -5,6 +5,7 @@ import AppList from './components/apps/AppList';
 import SharedMetaTab from './components/detail/SharedMetaTab';
 import GooglePlayTab from './components/detail/GooglePlayTab';
 import AppStoreTab from './components/detail/AppStoreTab';
+import LocalizationTab from './components/detail/LocalizationTab';
 import BuildReleaseTab from './components/detail/BuildReleaseTab';
 import SettingsPage from './components/SettingsPage';
 import ToastContainer from './components/common/Toast';
@@ -12,6 +13,7 @@ import './index.css';
 
 const TAB_COMPONENTS = {
   shared: SharedMetaTab,
+  localization: LocalizationTab,
   google: GooglePlayTab,
   apple: AppStoreTab,
   build: BuildReleaseTab,
@@ -19,6 +21,7 @@ const TAB_COMPONENTS = {
 
 const TAB_TITLES = {
   shared: '공통 정보',
+  localization: '로컬라이제이션 & ASO',
   google: 'Google Play',
   apple: 'App Store',
   build: 'Build & Release',

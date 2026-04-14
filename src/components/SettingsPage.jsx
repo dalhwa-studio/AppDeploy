@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Settings, Server, Shield, Database, Download, Upload,
-  Trash2, CheckCircle2, AlertCircle, RefreshCw, Info, Key, Terminal
+  Trash2, CheckCircle2, AlertCircle, RefreshCw, Info, Key, Terminal, Sparkles
 } from 'lucide-react';
 import { useApp } from '../hooks/useAppContext';
 import { API_BASE } from '../utils/constants';
@@ -12,9 +12,64 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const fileInputRef = useRef(null);
 
+  // ─── LLM credential state ───
+  const [llmStatus, setLlmStatus] = useState({ anthropic: null, openai: null });
+  const [llmProvider, setLlmProvider] = useState('anthropic');
+  const [llmKey, setLlmKey] = useState('');
+  const [llmSaving, setLlmSaving] = useState(false);
+
+  const loadLlmStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/llm-credential`);
+      const data = await res.json();
+      if (data.success) setLlmStatus({ anthropic: data.anthropic, openai: data.openai });
+    } catch {}
+  };
+
+  const saveLlmKey = async () => {
+    if (!llmKey.trim()) {
+      addToast('API Key를 입력해 주세요.', 'warning');
+      return;
+    }
+    setLlmSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/llm-credential`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: llmProvider, apiKey: llmKey.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addToast(`${llmProvider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API Key가 안전하게 저장되었습니다.`, 'success');
+        setLlmKey('');
+        await loadLlmStatus();
+      } else {
+        addToast(`저장 실패: ${data.error}`, 'error');
+      }
+    } catch (err) {
+      addToast(`서버 연결 실패: ${err.message}`, 'error');
+    }
+    setLlmSaving(false);
+  };
+
+  const removeLlmKey = async (provider) => {
+    if (!window.confirm(`${provider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API Key를 삭제하시겠습니까?`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/llm-credential/${provider}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        addToast('삭제되었습니다.', 'info');
+        await loadLlmStatus();
+      }
+    } catch (err) {
+      addToast(`서버 연결 실패: ${err.message}`, 'error');
+    }
+  };
+
   // Check server health
   useEffect(() => {
     checkServerHealth();
+    loadLlmStatus();
   }, []);
 
   const checkServerHealth = async () => {
@@ -187,6 +242,78 @@ export default function SettingsPage() {
             ) : (
               <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>서버 연결 후 확인 가능</span>
             )}
+          </div>
+        </div>
+
+        {/* AI Services (for Localization + ASO) */}
+        <div className="section">
+          <div className="section-header">
+            <Sparkles size={18} className="icon" />
+            <h3>AI 서비스 (번역 + ASO 최적화)</h3>
+          </div>
+          <div className="glass-card" style={{ padding: 'var(--space-md)' }}>
+            <div className="flex flex-col gap-md">
+              <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                대상 국가별로 앱 메타데이터를 자동 번역하고 ASO(검색 최적화)를 수행합니다.
+                API Key는 서버에 AES-256-GCM으로 암호화 저장됩니다.
+              </div>
+
+              {/* Anthropic status */}
+              <div className="flex items-center gap-sm" style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>Anthropic Claude</div>
+                  {llmStatus.anthropic ? (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
+                      연결됨 · {new Date(llmStatus.anthropic.createdAt).toLocaleString('ko-KR')}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>미연결</div>
+                  )}
+                </div>
+                {llmStatus.anthropic && (
+                  <button className="btn btn-ghost btn-sm" onClick={() => removeLlmKey('anthropic')}>삭제</button>
+                )}
+              </div>
+
+              {/* OpenAI status */}
+              <div className="flex items-center gap-sm" style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>OpenAI GPT</div>
+                  {llmStatus.openai ? (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
+                      연결됨 · {new Date(llmStatus.openai.createdAt).toLocaleString('ko-KR')}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>미연결</div>
+                  )}
+                </div>
+                {llmStatus.openai && (
+                  <button className="btn btn-ghost btn-sm" onClick={() => removeLlmKey('openai')}>삭제</button>
+                )}
+              </div>
+
+              {/* Add / update key */}
+              <div className="flex items-center gap-sm" style={{ flexWrap: 'wrap' }}>
+                <select
+                  value={llmProvider}
+                  onChange={e => setLlmProvider(e.target.value)}
+                  style={{ padding: '6px 10px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
+                >
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI</option>
+                </select>
+                <input
+                  type="password"
+                  placeholder={llmProvider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
+                  value={llmKey}
+                  onChange={e => setLlmKey(e.target.value)}
+                  style={{ flex: 1, minWidth: 200, fontFamily: 'var(--font-mono)', fontSize: '0.8125rem' }}
+                />
+                <button className="btn btn-primary btn-sm" onClick={saveLlmKey} disabled={llmSaving}>
+                  {llmSaving ? '저장 중...' : '저장'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

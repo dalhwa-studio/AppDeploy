@@ -12,6 +12,7 @@ import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt 
 import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib/deploymentManager.js';
 import { startPolling, stopPolling, getActivePollers } from './lib/statusPoller.js';
 import { syncMetadataToGoogle, syncMetadataToApple } from './lib/metadataSync.js';
+import { generateForLocales } from './lib/asoGenerator.js';
 import { isFastlaneAvailable, getFastlaneVersion, runFastlaneLane, generateFastfile } from './lib/fastlaneRunner.js';
 import { loadHistory, addHistoryEntry, updateHistoryEntry, getAllHistory } from './lib/historyStore.js';
 
@@ -259,18 +260,19 @@ app.post('/api/sync/metadata', (req, res) => {
 
 // ─── Metadata Sync to Store (actual API upload) ───
 app.post('/api/sync/metadata/store', async (req, res) => {
-  const { store, credentialId, packageName, bundleId, metadata } = req.body;
+  const { store, credentialId, packageName, bundleId, metadata, metadataByLocale, defaultLocale, versionString } = req.body;
 
   if (!store || !credentialId) {
     return res.json({ success: false, error: '스토어 타입과 자격증명이 필요합니다.' });
   }
 
   try {
+    const common = { credentialId, metadata, metadataByLocale, defaultLocale, versionString, encryptionKey: ENCRYPTION_KEY };
     let result;
     if (store === 'google_play') {
-      result = await syncMetadataToGoogle({ credentialId, packageName, metadata, encryptionKey: ENCRYPTION_KEY });
+      result = await syncMetadataToGoogle({ ...common, packageName });
     } else if (store === 'app_store') {
-      result = await syncMetadataToApple({ credentialId, bundleId, metadata, encryptionKey: ENCRYPTION_KEY });
+      result = await syncMetadataToApple({ ...common, bundleId });
     } else {
       return res.json({ success: false, error: '지원하지 않는 스토어 타입입니다.' });
     }
@@ -278,6 +280,93 @@ app.post('/api/sync/metadata/store', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('[Metadata Store Sync Error]', err);
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── LLM Credential (Anthropic / OpenAI API Key) ───
+app.post('/api/llm-credential', (req, res) => {
+  const { provider, apiKey } = req.body;
+  if (!provider || !apiKey) {
+    return res.json({ success: false, error: 'provider와 apiKey가 필요합니다.' });
+  }
+  if (!['anthropic', 'openai'].includes(provider)) {
+    return res.json({ success: false, error: '지원하지 않는 provider입니다.' });
+  }
+  try {
+    // Remove any existing llm credential for this provider
+    try {
+      const existing = findCredentialByType(`llm_${provider}`);
+      if (existing) {
+        const fs2 = fs;
+        const p = path.join(KEYS_DIR, `${existing.id}.enc`);
+        if (fs2.existsSync(p)) fs2.unlinkSync(p);
+      }
+    } catch {}
+    const credentialId = saveCredential(
+      { storeType: `llm_${provider}`, fileName: `${provider}.key`, fileContent: apiKey, metadata: { provider } },
+      ENCRYPTION_KEY
+    );
+    res.json({ success: true, credentialId, provider });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/llm-credential', (req, res) => {
+  try {
+    const anth = findCredentialByType('llm_anthropic');
+    const oai = findCredentialByType('llm_openai');
+    res.json({
+      success: true,
+      anthropic: anth ? { credentialId: anth.id, createdAt: anth.createdAt } : null,
+      openai: oai ? { credentialId: oai.id, createdAt: oai.createdAt } : null,
+    });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/llm-credential/:provider', (req, res) => {
+  try {
+    const { provider } = req.params;
+    const existing = findCredentialByType(`llm_${provider}`);
+    if (!existing) return res.json({ success: true });
+    const p = path.join(KEYS_DIR, `${existing.id}.enc`);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+    res.json({ success: true });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── ASO Generation (translate + optimize per locale) ───
+app.post('/api/metadata/generate-aso', async (req, res) => {
+  const { provider, store, sourceLocale, sourceMetadata, targetLocales } = req.body;
+
+  if (!provider || !sourceMetadata || !Array.isArray(targetLocales) || targetLocales.length === 0) {
+    return res.json({ success: false, error: 'provider / sourceMetadata / targetLocales가 필요합니다.' });
+  }
+
+  try {
+    const cred = findCredentialByType(`llm_${provider}`);
+    if (!cred) {
+      return res.json({ success: false, error: `${provider} API Key가 설정되지 않았습니다. 설정 페이지에서 등록해 주세요.` });
+    }
+    const apiKey = loadCredential(cred.id, ENCRYPTION_KEY);
+
+    const results = await generateForLocales({
+      provider,
+      apiKey,
+      store: store || 'both',
+      sourceLocale: sourceLocale || 'ko-KR',
+      sourceMetadata,
+      targetLocales,
+    });
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('[ASO Generate Error]', err);
     res.json({ success: false, error: err.message });
   }
 });
