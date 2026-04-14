@@ -294,44 +294,69 @@ export default function BuildReleaseTab() {
         });
       }
 
-      // Apple deployment (still simulated)
+      // Apple deployment (real API)
       if (target === 'apple' || target === 'both') {
-        await new Promise(r => setTimeout(r, 2000));
-        const newDeployment = {
-          id: crypto.randomUUID(),
-          target: 'apple',
-          version: currentApp.shared.versionName,
-          status: 'submitted',
-          timestamp: new Date().toISOString(),
-        };
-        const deployments = [...(currentApp.deployments || []), newDeployment];
-        dispatch({
-          type: 'UPDATE_APP_FIELD',
-          payload: { id: currentApp.id, path: 'deployments', value: deployments },
+        const appleResponse = await fetch(`${API_BASE}/deploy/apple`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bundleId: currentApp.iosBundleId,
+            credentialId: storeAccounts.appStore.credentialId,
+            buildId: currentApp.builds.ios.buildId,
+            versionString: currentApp.shared?.versionName || '1.0.0',
+            metadata: {
+              whatsNew: currentApp.appStore?.whatsNew,
+              description: currentApp.shared?.description,
+              keywords: currentApp.appStore?.keywords,
+              promotionalText: currentApp.appStore?.promotionalText,
+              marketingUrl: currentApp.appStore?.marketingUrl,
+            },
+            reviewInfo: {
+              contactFirstName: currentApp.appStore?.reviewContact?.firstName,
+              contactPhone: currentApp.appStore?.reviewContact?.phone,
+              contactEmail: currentApp.appStore?.reviewContact?.email,
+              notes: currentApp.appStore?.reviewNotes,
+              demoUsername: currentApp.appStore?.demoAccount?.username,
+              demoPassword: currentApp.appStore?.demoAccount?.password,
+            },
+            socketId: socketRef.current?.id,
+          }),
         });
+        const appleResult = await appleResponse.json();
 
-        if (target === 'apple') {
+        if (!appleResult.success) {
+          addToast(`App Store 배포 실패: ${appleResult.error}`, 'error');
+          if (target === 'apple') {
+            setIsDeploying(null);
+            return;
+          }
+        } else {
+          const newDeployment = {
+            id: appleResult.deploymentId,
+            target: 'apple',
+            version: currentApp.shared.versionName,
+            status: 'in_progress',
+            timestamp: new Date().toISOString(),
+          };
+          const deployments = [...(currentApp.deployments || []), newDeployment];
           dispatch({
             type: 'UPDATE_APP_FIELD',
-            payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.IN_REVIEW },
+            payload: { id: currentApp.id, path: 'deployments', value: deployments },
           });
-          addToast('App Store에 배포가 제출되었습니다!', 'success');
-          setIsDeploying(null);
         }
       }
 
+      // Update app status
+      dispatch({
+        type: 'UPDATE_APP_FIELD',
+        payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.UPLOADING },
+      });
+
       if (target === 'google') {
-        dispatch({
-          type: 'UPDATE_APP_FIELD',
-          payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.UPLOADING },
-        });
         addToast('Google Play 배포가 시작되었습니다. 진행 상태를 확인해 주세요.', 'info');
-      }
-      if (target === 'both') {
-        dispatch({
-          type: 'UPDATE_APP_FIELD',
-          payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.UPLOADING },
-        });
+      } else if (target === 'apple') {
+        addToast('App Store 배포가 시작되었습니다. 진행 상태를 확인해 주세요.', 'info');
+      } else {
         addToast('Google Play & App Store 배포가 시작되었습니다!', 'info');
       }
     } catch (err) {

@@ -84,6 +84,7 @@ export const FIELD_LIMITS = {
 export const API_BASE = 'http://localhost:3721/api';
 
 export const DEPLOY_STEPS = {
+  // Google Play steps
   DECRYPT_CREDENTIAL: '자격증명 복호화',
   AUTH: 'Google Play API 인증',
   CREATE_EDIT: '편집 세션 생성',
@@ -91,6 +92,18 @@ export const DEPLOY_STEPS = {
   UPDATE_TRACK: '트랙 설정',
   UPDATE_LISTING: '메타데이터 업데이트',
   COMMIT: '변경사항 적용',
+  // App Store steps
+  APPLE_DECRYPT: '자격증명 복호화',
+  APPLE_AUTH: 'App Store Connect 인증',
+  APPLE_FIND_APP: '앱 조회',
+  APPLE_UPLOAD_IPA: 'IPA 파일 업로드',
+  APPLE_PROCESS_BUILD: '빌드 처리 대기',
+  APPLE_CREATE_VERSION: '버전 생성',
+  APPLE_UPDATE_META: '메타데이터 업데이트',
+  APPLE_REVIEW_INFO: '심사 정보 설정',
+  APPLE_SELECT_BUILD: '빌드 연결',
+  APPLE_SUBMIT: '심사 제출',
+  // Shared
   DONE: '완료',
 };
 

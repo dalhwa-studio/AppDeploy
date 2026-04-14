@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import CharCounter from '../common/CharCounter';
-import { FIELD_LIMITS } from '../../utils/constants';
+import { FIELD_LIMITS, API_BASE } from '../../utils/constants';
 
 export default function AppStoreTab() {
   const { currentApp, dispatch, addToast, storeAccounts } = useApp();
@@ -26,7 +26,7 @@ export default function AppStoreTab() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       const content = ev.target.result;
       if (!content.includes('BEGIN PRIVATE KEY')) {
         addToast('.p8 파일에 PRIVATE KEY가 포함되어 있지 않습니다.', 'error');
@@ -36,18 +36,43 @@ export default function AppStoreTab() {
         addToast('Issuer ID와 Key ID를 먼저 입력해 주세요.', 'warning');
         return;
       }
-      dispatch({
-        type: 'UPDATE_STORE_ACCOUNTS',
-        payload: {
-          appStore: {
-            issuerId,
-            keyId,
+
+      try {
+        // Save credential to server (encrypted)
+        const credentialPayload = JSON.stringify({ issuerId, keyId, privateKey: content });
+        const res = await fetch(`${API_BASE}/store-accounts/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeType: 'app_store',
             fileName: file.name,
-            uploadedAt: new Date().toISOString(),
+            fileContent: credentialPayload,
+            metadata: { issuerId, keyId },
+          }),
+        });
+        const result = await res.json();
+
+        if (!result.success) {
+          addToast(`저장 실패: ${result.error}`, 'error');
+          return;
+        }
+
+        dispatch({
+          type: 'UPDATE_STORE_ACCOUNTS',
+          payload: {
+            appStore: {
+              credentialId: result.credentialId,
+              issuerId,
+              keyId,
+              fileName: file.name,
+              uploadedAt: new Date().toISOString(),
+            },
           },
-        },
-      });
-      addToast('App Store Connect API Key가 연결되었습니다.', 'success');
+        });
+        addToast('App Store Connect API Key가 안전하게 저장되었습니다.', 'success');
+      } catch (err) {
+        addToast(`서버 연결 실패: ${err.message}`, 'error');
+      }
     };
     reader.readAsText(file);
   };

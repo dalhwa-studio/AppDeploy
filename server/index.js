@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt } from './lib/credentialManager.js';
-import { deployToGooglePlay, getDeploymentStatus } from './lib/deploymentManager.js';
+import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib/deploymentManager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -287,29 +287,47 @@ app.get('/api/deploy/:deploymentId/status', (req, res) => {
 
 // ─── Deploy to App Store ───
 app.post('/api/deploy/apple', async (req, res) => {
-  const { appData } = req.body;
+  const { bundleId, credentialId, buildId, versionString, metadata, reviewInfo, socketId } = req.body;
 
-  if (!appData?.iosBundleId) {
+  if (!bundleId) {
     return res.json({ success: false, error: 'iOS Bundle ID가 설정되지 않았습니다.' });
   }
-
-  try {
-    await fetch(`http://localhost:${PORT}/api/sync/metadata`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appData, store: 'app_store' }),
-    });
-
-    // TODO: Implement actual App Store Connect API deployment
-    res.json({
-      success: true,
-      message: 'App Store에 배포가 시작되었습니다.',
-      deploymentId: crypto.randomUUID(),
-      status: 'queued',
-    });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
+  if (!credentialId) {
+    return res.json({ success: false, error: '자격증명이 설정되지 않았습니다. App Store 탭에서 API Key를 업로드해 주세요.' });
   }
+  if (!buildId) {
+    return res.json({ success: false, error: 'IPA 파일이 업로드되지 않았습니다.' });
+  }
+
+  // Find the IPA file
+  const buildFiles = fs.readdirSync(BUILDS_DIR);
+  const ipaFile = buildFiles.find(f => f.startsWith(buildId));
+  if (!ipaFile) {
+    return res.json({ success: false, error: '빌드 파일을 찾을 수 없습니다. IPA를 다시 업로드해 주세요.' });
+  }
+  const ipaFilePath = path.join(BUILDS_DIR, ipaFile);
+
+  // Return immediately, deploy async
+  const deploymentId = crypto.randomUUID();
+  res.json({
+    success: true,
+    deploymentId,
+    status: 'in_progress',
+    message: 'App Store 배포가 시작되었습니다.',
+  });
+
+  // Run deployment asynchronously
+  deployToAppStore({
+    bundleId,
+    credentialId,
+    ipaFilePath,
+    versionString: versionString || '1.0.0',
+    metadata,
+    reviewInfo,
+    encryptionKey: ENCRYPTION_KEY,
+  }, io, socketId).catch(err => {
+    console.error('[App Store Deploy Error]', err.message);
+  });
 });
 
 // ─── Screenshots save ───
