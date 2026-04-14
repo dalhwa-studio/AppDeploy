@@ -12,6 +12,7 @@ import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt 
 import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib/deploymentManager.js';
 import { startPolling, stopPolling, getActivePollers } from './lib/statusPoller.js';
 import { syncMetadataToGoogle, syncMetadataToApple } from './lib/metadataSync.js';
+import { isFastlaneAvailable, getFastlaneVersion, runFastlaneLane, generateFastfile } from './lib/fastlaneRunner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -385,6 +386,73 @@ app.delete('/api/deploy/poll/:pollingId', (req, res) => {
 // ─── Get Active Pollers ───
 app.get('/api/deploy/poll', (req, res) => {
   res.json({ success: true, pollers: getActivePollers() });
+});
+
+// ─── Fastlane: Status ───
+app.get('/api/fastlane/status', (req, res) => {
+  const available = isFastlaneAvailable();
+  res.json({
+    success: true,
+    available,
+    version: available ? getFastlaneVersion() : null,
+  });
+});
+
+// ─── Fastlane: Generate Fastfile ───
+app.post('/api/fastlane/init', (req, res) => {
+  const { bundleId, platform, scheme } = req.body;
+  if (!bundleId) {
+    return res.json({ success: false, error: 'Bundle ID가 필요합니다.' });
+  }
+
+  try {
+    const workDir = path.join(SYNC_DIR, bundleId.replace(/\./g, '_'));
+    fs.mkdirSync(workDir, { recursive: true });
+    const fastfilePath = generateFastfile(workDir, { platform, bundleId, scheme });
+    res.json({ success: true, fastfilePath, message: 'Fastfile이 생성되었습니다.' });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Fastlane: Run Lane ───
+app.post('/api/fastlane/run', async (req, res) => {
+  const { lane, platform, bundleId, env, socketId } = req.body;
+
+  if (!lane) {
+    return res.json({ success: false, error: 'lane 이름이 필요합니다.' });
+  }
+
+  if (!isFastlaneAvailable()) {
+    return res.json({ success: false, error: 'Fastlane이 설치되어 있지 않습니다.' });
+  }
+
+  const workDir = bundleId
+    ? path.join(SYNC_DIR, bundleId.replace(/\./g, '_'))
+    : SYNC_DIR;
+
+  // Return immediately
+  const runId = crypto.randomUUID();
+  res.json({ success: true, runId, message: `Fastlane ${lane} 실행이 시작되었습니다.` });
+
+  // Run async with Socket.IO output streaming
+  try {
+    await runFastlaneLane(
+      { lane, platform, workDir, env },
+      (data) => {
+        if (io && socketId) {
+          io.to(socketId).emit('fastlane:output', { runId, ...data });
+        }
+      }
+    );
+    if (io && socketId) {
+      io.to(socketId).emit('fastlane:complete', { runId, success: true });
+    }
+  } catch (err) {
+    if (io && socketId) {
+      io.to(socketId).emit('fastlane:error', { runId, error: err.message });
+    }
+  }
 });
 
 // ─── Screenshots save ───

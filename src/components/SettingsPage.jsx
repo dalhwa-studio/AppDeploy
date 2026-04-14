@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Settings, Server, Shield, Database, Download, Upload,
-  Trash2, CheckCircle2, AlertCircle, RefreshCw, Info, Key
+  Trash2, CheckCircle2, AlertCircle, RefreshCw, Info, Key, Terminal
 } from 'lucide-react';
 import { useApp } from '../hooks/useAppContext';
 import { API_BASE } from '../utils/constants';
@@ -147,6 +147,45 @@ export default function SettingsPage() {
                   <RefreshCw size={14} /> 재시도
                 </button>
               </div>
+            )}
+          </div>
+        </div>
+
+        {/* Fastlane */}
+        <div className="section">
+          <div className="section-header">
+            <Terminal size={18} className="icon" />
+            <h3>Fastlane</h3>
+          </div>
+          <div className="glass-card" style={{ padding: 'var(--space-md)' }}>
+            {serverHealth ? (
+              <div className="flex flex-col gap-sm">
+                <div className="flex items-center gap-sm">
+                  {serverHealth.fastlane !== 'not installed' ? (
+                    <CheckCircle2 size={16} style={{ color: 'var(--color-success)' }} />
+                  ) : (
+                    <AlertCircle size={16} style={{ color: 'var(--text-muted)' }} />
+                  )}
+                  <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>
+                    {serverHealth.fastlane !== 'not installed' ? serverHealth.fastlane : '설치되지 않음'}
+                  </span>
+                </div>
+                {serverHealth.fastlane === 'not installed' && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Fastlane을 설치하면 메타데이터 동기화, 스크린샷 업로드 등을 자동화할 수 있습니다.
+                    <br />
+                    설치: <code style={{ background: 'var(--bg-input)', padding: '2px 6px', borderRadius: 4 }}>brew install fastlane</code> 또는{' '}
+                    <code style={{ background: 'var(--bg-input)', padding: '2px 6px', borderRadius: 4 }}>gem install fastlane</code>
+                  </div>
+                )}
+                {serverHealth.fastlane !== 'not installed' && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    메타데이터 동기화 시 Fastlane deliver(iOS)/supply(Android)를 사용할 수 있습니다.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>서버 연결 후 확인 가능</span>
             )}
           </div>
         </div>
