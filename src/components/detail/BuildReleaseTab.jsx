@@ -226,6 +226,38 @@ export default function BuildReleaseTab() {
     };
   }, [addToast]);
 
+  // Load server-side history on mount
+  useEffect(() => {
+    if (!currentApp?.id) return;
+    fetch(`${API_BASE}/history/${currentApp.id}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.history?.length > 0) {
+          // Merge server history with local (server takes priority)
+          const localDeps = currentApp.deployments || [];
+          const localIds = new Set(localDeps.map(d => d.id));
+          const serverOnly = data.history.filter(h => !localIds.has(h.id));
+          if (serverOnly.length > 0) {
+            dispatch({
+              type: 'UPDATE_APP_FIELD',
+              payload: { id: currentApp.id, path: 'deployments', value: [...localDeps, ...serverOnly] },
+            });
+          }
+        }
+      })
+      .catch(() => {});
+  }, [currentApp?.id]);
+
+  // Save deployment to server
+  const saveDeploymentToServer = useCallback((entry) => {
+    if (!currentApp?.id) return;
+    fetch(`${API_BASE}/history/${currentApp.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entry }),
+    }).catch(() => {});
+  }, [currentApp?.id]);
+
   const updateBuild = useCallback((platform, data) => {
     dispatch({
       type: 'UPDATE_APP_FIELD',
@@ -306,6 +338,7 @@ export default function BuildReleaseTab() {
           type: 'UPDATE_APP_FIELD',
           payload: { id: currentApp.id, path: 'deployments', value: deployments },
         });
+        saveDeploymentToServer(newDeployment);
       }
 
       // Apple deployment (real API)
@@ -357,6 +390,7 @@ export default function BuildReleaseTab() {
             type: 'UPDATE_APP_FIELD',
             payload: { id: currentApp.id, path: 'deployments', value: deployments },
           });
+          saveDeploymentToServer(newDeployment);
         }
       }
 

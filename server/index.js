@@ -13,6 +13,7 @@ import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib
 import { startPolling, stopPolling, getActivePollers } from './lib/statusPoller.js';
 import { syncMetadataToGoogle, syncMetadataToApple } from './lib/metadataSync.js';
 import { isFastlaneAvailable, getFastlaneVersion, runFastlaneLane, generateFastfile } from './lib/fastlaneRunner.js';
+import { loadHistory, addHistoryEntry, updateHistoryEntry, getAllHistory } from './lib/historyStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -483,6 +484,35 @@ app.post('/api/screenshots/save', (req, res) => {
     console.error('[Screenshot Save Error]', err);
     res.json({ success: false, error: err.message });
   }
+});
+
+// ─── Deployment History: Get ───
+app.get('/api/history/:appId', (req, res) => {
+  const history = loadHistory(req.params.appId);
+  res.json({ success: true, history });
+});
+
+// ─── Deployment History: Add ───
+app.post('/api/history/:appId', (req, res) => {
+  const { entry } = req.body;
+  if (!entry) {
+    return res.json({ success: false, error: '히스토리 항목이 필요합니다.' });
+  }
+  const history = addHistoryEntry(req.params.appId, entry);
+  res.json({ success: true, history });
+});
+
+// ─── Deployment History: Update ───
+app.patch('/api/history/:appId/:deploymentId', (req, res) => {
+  const { updates } = req.body;
+  const history = updateHistoryEntry(req.params.appId, req.params.deploymentId, updates);
+  res.json({ success: true, history });
+});
+
+// ─── Deployment History: Get All ───
+app.get('/api/history', (req, res) => {
+  const allHistory = getAllHistory();
+  res.json({ success: true, history: allHistory });
 });
 
 // ═══════════════════════════════════════════
