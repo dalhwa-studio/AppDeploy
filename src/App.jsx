@@ -6,6 +6,7 @@ import SharedMetaTab from './components/detail/SharedMetaTab';
 import GooglePlayTab from './components/detail/GooglePlayTab';
 import AppStoreTab from './components/detail/AppStoreTab';
 import BuildReleaseTab from './components/detail/BuildReleaseTab';
+import SettingsPage from './components/SettingsPage';
 import ToastContainer from './components/common/Toast';
 import './index.css';
 
@@ -26,15 +27,23 @@ const TAB_TITLES = {
 function AppRouter() {
   const { currentAppId } = useApp();
   const [activeTab, setActiveTab] = useState('shared');
+  const [view, setView] = useState('list'); // 'list' | 'settings'
 
   const ActiveComponent = TAB_COMPONENTS[activeTab] || SharedMetaTab;
 
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setView('list');
+  };
+
   return (
     <div className="app-layout">
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+      <Sidebar activeTab={activeTab} onTabChange={handleTabChange} view={view} onViewChange={setView} />
 
       <div className="main-area">
-        {currentAppId ? (
+        {view === 'settings' ? (
+          <SettingsPage />
+        ) : currentAppId ? (
           <>
             <div className="page-header">
               <h2>{TAB_TITLES[activeTab]}</h2>

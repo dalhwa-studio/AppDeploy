@@ -13,7 +13,7 @@ const DETAIL_TABS = [
   { id: 'build', label: 'Build & Release', icon: Upload },
 ];
 
-export default function Sidebar({ activeTab, onTabChange }) {
+export default function Sidebar({ activeTab, onTabChange, view, onViewChange }) {
   const { currentApp, currentAppId, storeAccounts, dispatch } = useApp();
 
   const handleBack = () => {
@@ -82,11 +82,17 @@ export default function Sidebar({ activeTab, onTabChange }) {
           </>
         ) : (
           <>
-            <button className="nav-item active">
+            <button
+              className={`nav-item ${view !== 'settings' ? 'active' : ''}`}
+              onClick={() => onViewChange('list')}
+            >
               <LayoutGrid size={18} />
               <span>앱 목록</span>
             </button>
-            <button className="nav-item" onClick={() => dispatch({ type: 'ADD_TOAST', payload: { message: '설정 기능은 준비 중입니다.', type: 'info' } })}>
+            <button
+              className={`nav-item ${view === 'settings' ? 'active' : ''}`}
+              onClick={() => onViewChange('settings')}
+            >
               <Settings size={18} />
               <span>설정</span>
             </button>
