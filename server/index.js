@@ -22,13 +22,35 @@ const io = new Server(httpServer, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3721;
 
 // ─── Encryption key (must be 32 bytes hex in production) ───
-const ENCRYPTION_KEY = process.env.ENCRYPTION_MASTER_KEY
-  || crypto.randomBytes(32).toString('hex');
+// Priority: env var > persisted local key file > newly generated (and persisted)
+const KEYS_DIR_FOR_MASTER = path.join(path.dirname(fileURLToPath(import.meta.url)), '.appdeploy_keys');
+const MASTER_KEY_FILE = path.join(KEYS_DIR_FOR_MASTER, '.master.key');
 
-if (!process.env.ENCRYPTION_MASTER_KEY) {
-  console.warn('⚠️  ENCRYPTION_MASTER_KEY 환경변수가 설정되지 않았습니다. 임시 키를 생성합니다.');
-  console.warn('   프로덕션에서는 반드시 .env 파일에 설정해 주세요.');
+function resolveEncryptionKey() {
+  if (process.env.ENCRYPTION_MASTER_KEY) return process.env.ENCRYPTION_MASTER_KEY;
+
+  fs.mkdirSync(KEYS_DIR_FOR_MASTER, { recursive: true });
+
+  if (fs.existsSync(MASTER_KEY_FILE)) {
+    const key = fs.readFileSync(MASTER_KEY_FILE, 'utf-8').trim();
+    if (key.length === 64) {
+      console.warn('⚠️  ENCRYPTION_MASTER_KEY 환경변수가 없지만, 저장된 로컬 키를 사용합니다.');
+      console.warn(`   경로: ${MASTER_KEY_FILE}`);
+      console.warn('   프로덕션에서는 반드시 .env 파일에 ENCRYPTION_MASTER_KEY를 설정하세요.');
+      return key;
+    }
+  }
+
+  const newKey = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(MASTER_KEY_FILE, newKey, { mode: 0o600 });
+  console.warn('⚠️  ENCRYPTION_MASTER_KEY가 없어 새 키를 생성하여 로컬에 저장했습니다.');
+  console.warn(`   경로: ${MASTER_KEY_FILE}`);
+  console.warn('   이 키로 암호화된 자격증명은 이 키가 있어야만 복호화됩니다.');
+  console.warn('   프로덕션에서는 반드시 .env 파일에 ENCRYPTION_MASTER_KEY를 설정하세요.');
+  return newKey;
 }
+
+const ENCRYPTION_KEY = resolveEncryptionKey();
 
 // ─── Middleware ───
 app.use(cors());

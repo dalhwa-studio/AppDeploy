@@ -57,7 +57,7 @@ export async function syncMetadataToApple({ credentialId, bundleId, metadata, en
 
   // Update localization
   const jwt3 = apple.generateJWT(issuerId, keyId, privateKey);
-  await apple.updateVersionLocalization(jwt3, version.id, 'ko', {
+  const result = await apple.updateVersionLocalization(jwt3, version.id, 'ko', {
     description: metadata.description,
     keywords: metadata.keywords,
     whatsNew: metadata.whatsNew,
@@ -65,9 +65,21 @@ export async function syncMetadataToApple({ credentialId, bundleId, metadata, en
     marketingUrl: metadata.marketingUrl,
   });
 
+  const skipped = result?.skipped || [];
+  const updated = result?.updated || [];
+
+  let message = 'App Store 메타데이터가 업데이트되었습니다.';
+  if (skipped.length > 0) {
+    const fields = skipped.map(s => s.field).join(', ');
+    message = `일부 필드가 업데이트되었습니다. (업데이트: ${updated.join(', ') || '없음'} / 건너뜀: ${fields} — 현재 버전 상태(${version.state})에서는 편집할 수 없음)`;
+  }
+
   return {
-    message: 'App Store 메타데이터가 업데이트되었습니다.',
+    message,
     versionId: version.id,
     versionString: version.versionString,
+    versionState: version.state,
+    updated,
+    skipped,
   };
 }

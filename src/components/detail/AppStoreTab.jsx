@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react';
 import {
   Apple, FileText, Shield, Upload, CheckCircle2,
-  AlertCircle, X, User, MessageSquare
+  AlertCircle, X, User, MessageSquare, Info
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import CharCounter from '../common/CharCounter';
@@ -148,9 +148,35 @@ export default function AppStoreTab() {
                   style={{ display: 'none' }}
                 />
               </label>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                App Store Connect → Users and Access → Keys → API Key 생성
-              </p>
+
+              <div style={{
+                padding: 'var(--space-md)',
+                background: 'var(--bg-elevated)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.75rem',
+                color: 'var(--text-secondary)',
+                lineHeight: 1.6,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>
+                  <Info size={14} /> 발급 방법
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  <strong>경로:</strong> App Store Connect → Users and Access → Integrations → App Store Connect API
+                  <span style={{ color: 'var(--text-muted)' }}> (Admin 또는 App Manager 권한 필요)</span>
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <li>
+                    <strong>Issuer ID</strong> — 위 화면 상단에 표시되는 UUID 형식 값 (팀 공통).
+                  </li>
+                  <li>
+                    <strong>Key ID</strong> — <code>+</code> 버튼으로 키 생성 후 목록에 표시되는 10자리 영숫자.
+                  </li>
+                  <li>
+                    <strong>.p8 Private Key</strong> — 키 생성 직후 <code>AuthKey_&lt;KeyID&gt;.p8</code> 파일을 다운로드.
+                    <span style={{ color: 'var(--color-warning)' }}> 1회만 다운로드 가능하며 분실 시 재발급해야 합니다.</span>
+                  </li>
+                </ul>
+              </div>
             </div>
           )}
         </div>

@@ -169,9 +169,11 @@ export async function waitForBuild(jwt, appId, buildVersion, maxWaitMs = 600000)
  * Get existing App Store version or create a new one.
  */
 export async function getOrCreateVersion(jwt, appId, versionString, platform = 'IOS') {
-  // Check for existing editable version
+  // Check for existing editable version.
+  // WAITING_FOR_REVIEW / IN_REVIEW are submitted states — most metadata (e.g. whatsNew)
+  // cannot be edited while in review, so we exclude them here.
   const existing = await apiRequest(jwt, 'GET',
-    `/v1/apps/${appId}/appStoreVersions?filter[appStoreState]=PREPARE_FOR_SUBMISSION,DEVELOPER_REJECTED,REJECTED,METADATA_REJECTED,WAITING_FOR_REVIEW,IN_REVIEW&filter[platform]=${platform}&limit=1`
+    `/v1/apps/${appId}/appStoreVersions?filter[appStoreState]=PREPARE_FOR_SUBMISSION,DEVELOPER_REJECTED,REJECTED,METADATA_REJECTED&filter[platform]=${platform}&limit=1`
   );
 
   if (existing?.data?.length > 0) {
@@ -216,19 +218,10 @@ export async function updateVersionLocalization(jwt, versionId, locale, fields) 
   if (fields.promotionalText) attributes.promotionalText = fields.promotionalText;
   if (fields.marketingUrl) attributes.marketingUrl = fields.marketingUrl;
 
-  if (Object.keys(attributes).length === 0) return;
+  if (Object.keys(attributes).length === 0) return { updated: [], skipped: [] };
 
-  if (localization) {
-    // Update existing
-    await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localization.id}`, {
-      data: {
-        type: 'appStoreVersionLocalizations',
-        id: localization.id,
-        attributes,
-      },
-    });
-  } else {
-    // Create new localization
+  if (!localization) {
+    // Create new localization — always safe, Apple accepts all fields on creation
     await apiRequest(jwt, 'POST', '/v1/appStoreVersionLocalizations', {
       data: {
         type: 'appStoreVersionLocalizations',
@@ -238,6 +231,42 @@ export async function updateVersionLocalization(jwt, versionId, locale, fields) 
         },
       },
     });
+    return { updated: Object.keys(attributes), skipped: [] };
+  }
+
+  // Try bulk update first
+  try {
+    await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localization.id}`, {
+      data: {
+        type: 'appStoreVersionLocalizations',
+        id: localization.id,
+        attributes,
+      },
+    });
+    return { updated: Object.keys(attributes), skipped: [] };
+  } catch (err) {
+    // If Apple rejects due to version state (409 STATE_ERROR on a specific attribute),
+    // retry each attribute individually so editable fields still go through.
+    if (err.status !== 409) throw err;
+
+    const updated = [];
+    const skipped = [];
+    for (const [key, value] of Object.entries(attributes)) {
+      try {
+        await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localization.id}`, {
+          data: {
+            type: 'appStoreVersionLocalizations',
+            id: localization.id,
+            attributes: { [key]: value },
+          },
+        });
+        updated.push(key);
+      } catch (perFieldErr) {
+        skipped.push({ field: key, reason: perFieldErr.message });
+      }
+    }
+    if (updated.length === 0) throw err;
+    return { updated, skipped };
   }
 }
 
