@@ -83,6 +83,17 @@ export const FIELD_LIMITS = {
 
 export const API_BASE = 'http://localhost:3721/api';
 
+export const DEPLOY_STEPS = {
+  DECRYPT_CREDENTIAL: '자격증명 복호화',
+  AUTH: 'Google Play API 인증',
+  CREATE_EDIT: '편집 세션 생성',
+  UPLOAD_BUNDLE: 'AAB 파일 업로드',
+  UPDATE_TRACK: '트랙 설정',
+  UPDATE_LISTING: '메타데이터 업데이트',
+  COMMIT: '변경사항 적용',
+  DONE: '완료',
+};
+
 export const DEFAULT_APP = {
   id: null,
   name: '',

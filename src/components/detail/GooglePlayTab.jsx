@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import CharCounter from '../common/CharCounter';
-import { FIELD_LIMITS, TRACKS, TRACK_LABELS } from '../../utils/constants';
+import { FIELD_LIMITS, TRACKS, TRACK_LABELS, API_BASE } from '../../utils/constants';
 
 export default function GooglePlayTab() {
   const { currentApp, dispatch, addToast, storeAccounts } = useApp();
@@ -38,17 +38,37 @@ export default function GooglePlayTab() {
       return;
     }
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const parsed = JSON.parse(ev.target.result);
         if (parsed.type !== 'service_account') {
           addToast('유효한 Service Account JSON이 아닙니다.', 'error');
           return;
         }
+
+        // Save credential to server (encrypted)
+        const response = await fetch(`${API_BASE}/store-accounts/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeType: 'google_play',
+            fileName: file.name,
+            fileContent: ev.target.result,
+            metadata: { email: parsed.client_email, projectId: parsed.project_id },
+          }),
+        });
+        const result = await response.json();
+
+        if (!result.success) {
+          addToast(`서버 저장 실패: ${result.error}`, 'error');
+          return;
+        }
+
         dispatch({
           type: 'UPDATE_STORE_ACCOUNTS',
           payload: {
             googlePlay: {
+              credentialId: result.credentialId,
               email: parsed.client_email,
               projectId: parsed.project_id,
               fileName: file.name,

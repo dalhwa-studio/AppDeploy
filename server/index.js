@@ -1,14 +1,21 @@
 import express from 'express';
 import cors from 'cors';
-import { execSync, exec } from 'child_process';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import multer from 'multer';
+import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt } from './lib/credentialManager.js';
+import { deployToGooglePlay, getDeploymentStatus } from './lib/deploymentManager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = 3721;
+const httpServer = createServer(app);
+const io = new Server(httpServer, { cors: { origin: '*' } });
+const PORT = process.env.PORT || 3721;
 
 // ─── Encryption key (must be 32 bytes hex in production) ───
 const ENCRYPTION_KEY = process.env.ENCRYPTION_MASTER_KEY
@@ -32,30 +39,34 @@ fs.mkdirSync(KEYS_DIR, { recursive: true });
 fs.mkdirSync(SYNC_DIR, { recursive: true });
 fs.mkdirSync(BUILDS_DIR, { recursive: true });
 
-// ═══════════════════════════════════════════
-// Encryption utilities (AES-256-GCM)
-// ═══════════════════════════════════════════
-function encrypt(plainText) {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-  let encrypted = cipher.update(plainText, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  const authTag = cipher.getAuthTag().toString('hex');
-  return {
-    encrypted: encrypted + ':' + authTag,
-    iv: iv.toString('hex'),
-  };
-}
+// ─── Multer config for binary uploads ───
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, BUILDS_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${crypto.randomUUID()}${ext}`);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.aab', '.ipa'].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('AAB 또는 IPA 파일만 업로드 가능합니다.'));
+    }
+  },
+});
 
-function decrypt(encryptedData, ivHex) {
-  const [encrypted, authTag] = encryptedData.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
-  decipher.setAuthTag(Buffer.from(authTag, 'hex'));
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
-}
+// ─── Socket.IO ───
+io.on('connection', (socket) => {
+  console.log(`🔌 Socket connected: ${socket.id}`);
+  socket.on('disconnect', () => {
+    console.log(`🔌 Socket disconnected: ${socket.id}`);
+  });
+});
 
 // ═══════════════════════════════════════════
 // API Routes
@@ -97,20 +108,7 @@ app.post('/api/store-accounts/upload', (req, res) => {
       }
     }
 
-    // Encrypt and store
-    const { encrypted, iv } = encrypt(fileContent);
-    const credentialId = crypto.randomUUID();
-    const credPath = path.join(KEYS_DIR, `${credentialId}.enc`);
-
-    fs.writeFileSync(credPath, JSON.stringify({
-      id: credentialId,
-      storeType,
-      fileName,
-      encrypted,
-      iv,
-      metadata: metadata || {},
-      createdAt: new Date().toISOString(),
-    }));
+    const credentialId = saveCredential({ storeType, fileName, fileContent, metadata }, ENCRYPTION_KEY);
 
     res.json({
       success: true,
@@ -120,6 +118,31 @@ app.post('/api/store-accounts/upload', (req, res) => {
   } catch (err) {
     res.json({ success: false, error: `저장 실패: ${err.message}` });
   }
+});
+
+// ─── Get Store Credential Info (without secret content) ───
+app.get('/api/store-accounts/:storeType', (req, res) => {
+  try {
+    const credential = findCredentialByType(req.params.storeType);
+    res.json({ success: true, credential });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Binary Upload ───
+app.post('/api/builds/upload', upload.single('binary'), (req, res) => {
+  if (!req.file) {
+    return res.json({ success: false, error: '파일이 업로드되지 않았습니다.' });
+  }
+
+  res.json({
+    success: true,
+    buildId: path.basename(req.file.filename, path.extname(req.file.filename)),
+    fileName: req.file.originalname,
+    fileSize: req.file.size,
+    filePath: req.file.path,
+  });
 });
 
 // ─── Metadata Sync (Generate Fastlane files) ───
@@ -143,10 +166,9 @@ app.post('/api/sync/metadata', (req, res) => {
     fs.mkdirSync(workDir, { recursive: true });
 
     const shared = appData.shared || {};
-    const locale = 'ko'; // Default locale
+    const locale = 'ko';
 
     if (store === 'app_store' || store === 'both') {
-      // Apple metadata (Fastlane deliver format)
       const applePath = path.join(workDir, 'metadata', locale);
       fs.mkdirSync(applePath, { recursive: true });
 
@@ -173,7 +195,6 @@ app.post('/api/sync/metadata', (req, res) => {
     }
 
     if (store === 'google_play' || store === 'both') {
-      // Google metadata (Fastlane supply format)
       const googlePath = path.join(workDir, 'metadata', 'android', 'ko-KR');
       fs.mkdirSync(googlePath, { recursive: true });
 
@@ -212,35 +233,56 @@ app.post('/api/sync/metadata', (req, res) => {
 
 // ─── Deploy to Google Play ───
 app.post('/api/deploy/google', async (req, res) => {
-  const { appData } = req.body;
-  const shared = appData?.shared || {};
-  const googlePlay = appData?.googlePlay || {};
+  const { packageName, credentialId, buildId, track, releaseNotes, metadata, socketId } = req.body;
 
-  if (!appData?.androidPackageName) {
+  if (!packageName) {
     return res.json({ success: false, error: 'Android Package Name이 설정되지 않았습니다.' });
   }
-
-  const workDir = path.join(SYNC_DIR, appData.androidPackageName.replace(/\./g, '_'));
-
-  try {
-    // Generate metadata files first
-    const metaResult = await fetch(`http://localhost:${PORT}/api/sync/metadata`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appData, store: 'google_play' }),
-    });
-
-    // TODO: Implement actual Google Play API deployment
-    // For now, return simulated success
-    res.json({
-      success: true,
-      message: `Google Play (${googlePlay.track || 'internal'} 트랙)에 배포가 시작되었습니다.`,
-      deploymentId: crypto.randomUUID(),
-      status: 'queued',
-    });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
+  if (!credentialId) {
+    return res.json({ success: false, error: '자격증명이 설정되지 않았습니다. Google Play 탭에서 Service Account를 업로드해 주세요.' });
   }
+  if (!buildId) {
+    return res.json({ success: false, error: 'AAB 파일이 업로드되지 않았습니다.' });
+  }
+
+  // Find the AAB file
+  const buildFiles = fs.readdirSync(BUILDS_DIR);
+  const aabFile = buildFiles.find(f => f.startsWith(buildId));
+  if (!aabFile) {
+    return res.json({ success: false, error: '빌드 파일을 찾을 수 없습니다. AAB를 다시 업로드해 주세요.' });
+  }
+  const aabFilePath = path.join(BUILDS_DIR, aabFile);
+
+  // Return immediately, deploy async
+  const deploymentId = crypto.randomUUID();
+  res.json({
+    success: true,
+    deploymentId,
+    status: 'in_progress',
+    message: 'Google Play 배포가 시작되었습니다.',
+  });
+
+  // Run deployment asynchronously
+  deployToGooglePlay({
+    packageName,
+    credentialId,
+    aabFilePath,
+    track: track || 'internal',
+    releaseNotes,
+    metadata,
+    encryptionKey: ENCRYPTION_KEY,
+  }, io, socketId).catch(err => {
+    console.error('[Google Play Deploy Error]', err.message);
+  });
+});
+
+// ─── Deployment Status (polling fallback) ───
+app.get('/api/deploy/:deploymentId/status', (req, res) => {
+  const status = getDeploymentStatus(req.params.deploymentId);
+  if (!status) {
+    return res.json({ success: false, error: '배포 정보를 찾을 수 없습니다.' });
+  }
+  res.json({ success: true, ...status });
 });
 
 // ─── Deploy to App Store ───
@@ -252,7 +294,6 @@ app.post('/api/deploy/apple', async (req, res) => {
   }
 
   try {
-    // Generate metadata files first
     await fetch(`http://localhost:${PORT}/api/sync/metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -285,12 +326,10 @@ app.post('/api/screenshots/save', (req, res) => {
       if (!ss.dataUrl) return;
       const base64Data = ss.dataUrl.replace(/^data:image\/\w+;base64,/, '');
 
-      // Apple screenshots
       const appleDir = path.join(baseDir, 'screenshots', 'ko');
       fs.mkdirSync(appleDir, { recursive: true });
       fs.writeFileSync(path.join(appleDir, `${idx + 1}.png`), base64Data, 'base64');
 
-      // Google screenshots
       const googleDir = path.join(baseDir, 'metadata', 'android', 'ko-KR', 'images', 'phoneScreenshots');
       fs.mkdirSync(googleDir, { recursive: true });
       fs.writeFileSync(path.join(googleDir, `${idx + 1}.png`), base64Data, 'base64');
@@ -306,7 +345,7 @@ app.post('/api/screenshots/save', (req, res) => {
 // ═══════════════════════════════════════════
 // Start Server
 // ═══════════════════════════════════════════
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`
   ╔════════════════════════════════════════════╗
   ║  🚀 AppDeploy Backend Server              ║
@@ -314,6 +353,7 @@ app.listen(PORT, () => {
   ║                                            ║
   ║  🔒 암호화: AES-256-GCM 활성              ║
   ║  📁 키 저장: ${KEYS_DIR}     ║
+  ║  🔌 Socket.IO: 활성                       ║
   ╚════════════════════════════════════════════╝
   `);
 });

@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, Upload, Package, FileText, CheckCircle2,
@@ -8,7 +8,8 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import StatusBadge from '../common/StatusBadge';
-import { APP_STATUSES } from '../../utils/constants';
+import { APP_STATUSES, API_BASE, DEPLOY_STEPS } from '../../utils/constants';
+import { io as socketIo } from 'socket.io-client';
 
 /* ─── Binary Upload Zone Component ─── */
 function BinaryUploadZone({ platform, accept, icon: Icon, label, color, bgColor, currentBuild, onUpload, onRemove }) {
@@ -47,24 +48,42 @@ function BinaryUploadZone({ platform, accept, icon: Icon, label, color, bgColor,
       return;
     }
 
-    // Simulate upload progress
+    // Real upload via XMLHttpRequest for progress tracking
     setUploadProgress(0);
-    const interval = setInterval(() => {
-      setUploadProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
+    const formData = new FormData();
+    formData.append('binary', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        setUploadProgress((e.loaded / e.total) * 100);
+      }
+    };
+    xhr.onload = () => {
+      try {
+        const result = JSON.parse(xhr.responseText);
+        if (result.success) {
           onUpload({
-            fileName: file.name,
-            fileSize: file.size,
+            buildId: result.buildId,
+            fileName: result.fileName,
+            fileSize: result.fileSize,
             uploadedAt: new Date().toISOString(),
             status: 'uploaded',
           });
-          setUploadProgress(null);
-          return 100;
+        } else {
+          console.error('Upload failed:', result.error);
         }
-        return prev + Math.random() * 15 + 5;
-      });
-    }, 200);
+      } catch (err) {
+        console.error('Upload response parse error:', err);
+      }
+      setUploadProgress(null);
+    };
+    xhr.onerror = () => {
+      console.error('Upload network error');
+      setUploadProgress(null);
+    };
+    xhr.open('POST', `${API_BASE}/builds/upload`);
+    xhr.send(formData);
   };
 
   const formatFileSize = (bytes) => {
@@ -161,7 +180,37 @@ function BinaryUploadZone({ platform, accept, icon: Icon, label, color, bgColor,
 export default function BuildReleaseTab() {
   const { currentApp, dispatch, addToast, storeAccounts } = useApp();
   const [isDeploying, setIsDeploying] = useState(null);
+  const [deployProgress, setDeployProgress] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const socketRef = useRef(null);
+
+  // Socket.IO connection
+  useEffect(() => {
+    const socket = socketIo('http://localhost:3721', { transports: ['websocket'] });
+    socketRef.current = socket;
+
+    socket.on('deploy:progress', (data) => {
+      setDeployProgress(data);
+    });
+
+    socket.on('deploy:complete', (data) => {
+      setDeployProgress({ ...data, step: 'DONE', progress: 100 });
+      setTimeout(() => {
+        setDeployProgress(null);
+        setIsDeploying(null);
+      }, 2000);
+    });
+
+    socket.on('deploy:error', (data) => {
+      setDeployProgress(null);
+      setIsDeploying(null);
+      addToast(`배포 실패 (${DEPLOY_STEPS[data.step] || data.step}): ${data.error}`, 'error');
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [addToast]);
 
   const updateBuild = useCallback((platform, data) => {
     dispatch({
@@ -202,30 +251,93 @@ export default function BuildReleaseTab() {
       }
     }
 
-    // Simulate deployment
-    await new Promise(r => setTimeout(r, 2000));
+    try {
+      // Google Play deployment
+      if (target === 'google' || target === 'both') {
+        const response = await fetch(`${API_BASE}/deploy/google`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            packageName: currentApp.androidPackageName,
+            credentialId: storeAccounts.googlePlay.credentialId,
+            buildId: currentApp.builds.android.buildId,
+            track: currentApp.googlePlay?.track || 'internal',
+            releaseNotes: currentApp.googlePlay?.releaseNotes || '',
+            metadata: {
+              title: currentApp.shared?.appName,
+              shortDescription: currentApp.googlePlay?.shortDescription,
+              fullDescription: currentApp.shared?.description,
+            },
+            socketId: socketRef.current?.id,
+          }),
+        });
+        const result = await response.json();
 
-    const newDeployment = {
-      id: crypto.randomUUID(),
-      target,
-      version: currentApp.shared.versionName,
-      status: 'submitted',
-      timestamp: new Date().toISOString(),
-    };
+        if (!result.success) {
+          addToast(`Google Play 배포 실패: ${result.error}`, 'error');
+          setIsDeploying(null);
+          return;
+        }
 
-    const deployments = [...(currentApp.deployments || []), newDeployment];
-    dispatch({
-      type: 'UPDATE_APP_FIELD',
-      payload: { id: currentApp.id, path: 'deployments', value: deployments },
-    });
-    dispatch({
-      type: 'UPDATE_APP_FIELD',
-      payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.IN_REVIEW },
-    });
+        // Record deployment
+        const newDeployment = {
+          id: result.deploymentId,
+          target: target === 'both' ? 'google' : target,
+          version: currentApp.shared.versionName,
+          status: 'in_progress',
+          timestamp: new Date().toISOString(),
+        };
+        const deployments = [...(currentApp.deployments || []), newDeployment];
+        dispatch({
+          type: 'UPDATE_APP_FIELD',
+          payload: { id: currentApp.id, path: 'deployments', value: deployments },
+        });
+      }
 
-    const targetLabel = target === 'both' ? 'Google Play & App Store' : target === 'google' ? 'Google Play' : 'App Store';
-    addToast(`${targetLabel}에 배포가 제출되었습니다! 🚀`, 'success');
-    setIsDeploying(null);
+      // Apple deployment (still simulated)
+      if (target === 'apple' || target === 'both') {
+        await new Promise(r => setTimeout(r, 2000));
+        const newDeployment = {
+          id: crypto.randomUUID(),
+          target: 'apple',
+          version: currentApp.shared.versionName,
+          status: 'submitted',
+          timestamp: new Date().toISOString(),
+        };
+        const deployments = [...(currentApp.deployments || []), newDeployment];
+        dispatch({
+          type: 'UPDATE_APP_FIELD',
+          payload: { id: currentApp.id, path: 'deployments', value: deployments },
+        });
+
+        if (target === 'apple') {
+          dispatch({
+            type: 'UPDATE_APP_FIELD',
+            payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.IN_REVIEW },
+          });
+          addToast('App Store에 배포가 제출되었습니다!', 'success');
+          setIsDeploying(null);
+        }
+      }
+
+      if (target === 'google') {
+        dispatch({
+          type: 'UPDATE_APP_FIELD',
+          payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.UPLOADING },
+        });
+        addToast('Google Play 배포가 시작되었습니다. 진행 상태를 확인해 주세요.', 'info');
+      }
+      if (target === 'both') {
+        dispatch({
+          type: 'UPDATE_APP_FIELD',
+          payload: { id: currentApp.id, path: 'status', value: APP_STATUSES.UPLOADING },
+        });
+        addToast('Google Play & App Store 배포가 시작되었습니다!', 'info');
+      }
+    } catch (err) {
+      addToast(`배포 중 오류 발생: ${err.message}`, 'error');
+      setIsDeploying(null);
+    }
   };
 
   if (!currentApp) return null;
@@ -260,6 +372,53 @@ export default function BuildReleaseTab() {
           <StatusBadge status={currentApp.status} />
         </div>
       </div>
+
+      {/* Deployment Progress */}
+      <AnimatePresence>
+        {deployProgress && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            style={{
+              marginBottom: 'var(--space-xl)',
+              overflow: 'hidden',
+            }}
+          >
+            <div className="glass-card" style={{
+              padding: 'var(--space-lg)',
+              border: '1px solid var(--accent-primary)',
+            }}>
+              <div className="flex items-center gap-sm mb-md">
+                {deployProgress.step === 'DONE' ? (
+                  <CheckCircle2 size={18} style={{ color: 'var(--color-success)' }} />
+                ) : (
+                  <Loader2 size={18} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--accent-primary)' }} />
+                )}
+                <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
+                  {DEPLOY_STEPS[deployProgress.step] || deployProgress.step}
+                </span>
+              </div>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+                {deployProgress.message}
+              </div>
+              <div className="progress-bar">
+                <div
+                  className="progress-fill"
+                  style={{
+                    width: `${deployProgress.progress || 0}%`,
+                    transition: 'width 0.5s ease',
+                    background: deployProgress.step === 'DONE' ? 'var(--color-success)' : undefined,
+                  }}
+                />
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 6, textAlign: 'right' }}>
+                {Math.round(deployProgress.progress || 0)}%
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Binary Upload */}
       <div className="section">
