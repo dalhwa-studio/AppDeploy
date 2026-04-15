@@ -15,6 +15,7 @@ import { syncMetadataToGoogle, syncMetadataToApple } from './lib/metadataSync.js
 import { generateForLocales } from './lib/asoGenerator.js';
 import { isFastlaneAvailable, getFastlaneVersion, runFastlaneLane, generateFastfile } from './lib/fastlaneRunner.js';
 import { loadHistory, addHistoryEntry, updateHistoryEntry, getAllHistory } from './lib/historyStore.js';
+import { getState as getAppState, replaceState as replaceAppState, upsertApp, deleteApp as deleteAppEntry, setStoreAccounts } from './lib/appStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -593,6 +594,55 @@ app.post('/api/screenshots/save', (req, res) => {
     res.json({ success: true, count: screenshots.length });
   } catch (err) {
     console.error('[Screenshot Save Error]', err);
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Apps: Get all (with storeAccounts) ───
+app.get('/api/apps', (req, res) => {
+  res.json({ success: true, ...getAppState() });
+});
+
+// ─── Apps: Replace whole state (used for one-time migration / bulk import) ───
+app.put('/api/apps', (req, res) => {
+  try {
+    const next = replaceAppState(req.body);
+    res.json({ success: true, ...next });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Apps: Upsert single app ───
+app.put('/api/apps/:id', (req, res) => {
+  try {
+    const app = req.body;
+    if (!app || app.id !== req.params.id) {
+      return res.json({ success: false, error: 'app.id가 URL과 일치해야 합니다.' });
+    }
+    upsertApp(app);
+    res.json({ success: true, app });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Apps: Delete ───
+app.delete('/api/apps/:id', (req, res) => {
+  try {
+    deleteAppEntry(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// ─── Apps: Update storeAccounts ───
+app.patch('/api/apps/store-accounts', (req, res) => {
+  try {
+    const accounts = setStoreAccounts(req.body || {});
+    res.json({ success: true, storeAccounts: accounts });
+  } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });

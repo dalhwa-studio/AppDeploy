@@ -1,47 +1,62 @@
-import React, { createContext, useContext, useReducer, useEffect, useCallback } from 'react';
-import { DEFAULT_APP, APP_STATUSES } from '../utils/constants';
+import React, { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react';
+import { DEFAULT_APP, APP_STATUSES, API_BASE } from '../utils/constants';
 
 const AppContext = createContext(null);
 
-/* ─── Local Storage Persistence ─── */
-const STORAGE_KEY = 'appdeploy_data';
+/* ─── Server Persistence ─── */
+const LEGACY_STORAGE_KEY = 'appdeploy_data';
+const MIGRATION_FLAG_KEY = 'appdeploy_migrated_to_server';
 
-function loadFromStorage() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
-      return {
-        apps: data.apps || [],
-        storeAccounts: data.storeAccounts || { googlePlay: null, appStore: null },
-      };
-    }
-  } catch (e) {
-    console.error('Failed to load data from localStorage:', e);
-  }
-  return { apps: [], storeAccounts: { googlePlay: null, appStore: null } };
+async function fetchState() {
+  const res = await fetch(`${API_BASE}/apps`);
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || 'failed to load apps');
+  return {
+    apps: data.apps || [],
+    storeAccounts: data.storeAccounts || { googlePlay: null, appStore: null },
+  };
 }
 
-function saveToStorage(state) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+async function pushState(state) {
+  await fetch(`${API_BASE}/apps`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       apps: state.apps,
       storeAccounts: state.storeAccounts,
-    }));
-  } catch (e) {
-    console.error('Failed to save data to localStorage:', e);
+    }),
+  });
+}
+
+function readLegacyLocal() {
+  try {
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !Array.isArray(data.apps)) return null;
+    return {
+      apps: data.apps,
+      storeAccounts: data.storeAccounts || { googlePlay: null, appStore: null },
+    };
+  } catch {
+    return null;
   }
 }
 
 /* ─── Reducer ─── */
 const initialState = {
-  ...loadFromStorage(),
+  apps: [],
+  storeAccounts: { googlePlay: null, appStore: null },
   currentAppId: null,
   toasts: [],
+  loaded: false,
 };
 
 function appReducer(state, action) {
   switch (action.type) {
+    case 'HYDRATE':
+      return { ...state, apps: action.payload.apps, storeAccounts: action.payload.storeAccounts, loaded: true };
+
     case 'ADD_APP': {
       const newApp = {
         ...DEFAULT_APP,
@@ -72,7 +87,6 @@ function appReducer(state, action) {
         apps: state.apps.map(app => {
           if (app.id !== id) return app;
           const updated = { ...app, updatedAt: new Date().toISOString() };
-          // Support nested paths like 'shared.appName'
           const keys = path.split('.');
           let ref = updated;
           for (let i = 0; i < keys.length - 1; i++) {
@@ -139,11 +153,73 @@ function appReducer(state, action) {
 /* ─── Provider ─── */
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
+  const saveTimer = useRef(null);
+  const lastSaved = useRef('');
 
-  // Persist to localStorage on change
+  // Initial hydrate: load from server, with one-time legacy localStorage migration
   useEffect(() => {
-    saveToStorage(state);
-  }, [state.apps, state.storeAccounts]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const server = await fetchState();
+
+        const migrated = localStorage.getItem(MIGRATION_FLAG_KEY) === '1';
+        const legacy = readLegacyLocal();
+        const serverEmpty = server.apps.length === 0
+          && !server.storeAccounts.googlePlay
+          && !server.storeAccounts.appStore;
+
+        if (!migrated && legacy && !serverEmpty) {
+          // Server already has data — just mark migrated, don't overwrite
+          localStorage.setItem(MIGRATION_FLAG_KEY, '1');
+        }
+
+        if (!migrated && legacy && serverEmpty) {
+          // Push legacy data to server
+          await pushState(legacy);
+          localStorage.setItem(MIGRATION_FLAG_KEY, '1');
+          if (!cancelled) {
+            dispatch({ type: 'HYDRATE', payload: legacy });
+            lastSaved.current = JSON.stringify({ apps: legacy.apps, storeAccounts: legacy.storeAccounts });
+          }
+          return;
+        }
+
+        if (!cancelled) {
+          dispatch({ type: 'HYDRATE', payload: server });
+          lastSaved.current = JSON.stringify({ apps: server.apps, storeAccounts: server.storeAccounts });
+        }
+      } catch (e) {
+        console.error('서버에서 앱 정보를 불러오지 못했습니다:', e);
+        // Fallback to legacy local data so user isn't blocked if server is down
+        const legacy = readLegacyLocal();
+        if (!cancelled && legacy) {
+          dispatch({ type: 'HYDRATE', payload: legacy });
+        } else if (!cancelled) {
+          dispatch({ type: 'HYDRATE', payload: { apps: [], storeAccounts: { googlePlay: null, appStore: null } } });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Debounced save to server on change (after initial hydrate)
+  useEffect(() => {
+    if (!state.loaded) return;
+    const snapshot = JSON.stringify({ apps: state.apps, storeAccounts: state.storeAccounts });
+    if (snapshot === lastSaved.current) return;
+
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      pushState(state)
+        .then(() => { lastSaved.current = snapshot; })
+        .catch(e => console.error('서버 저장 실패:', e));
+    }, 300);
+
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [state.apps, state.storeAccounts, state.loaded]);
 
   // Auto-remove toasts
   useEffect(() => {
@@ -167,6 +243,7 @@ export function AppProvider({ children }) {
     currentAppId: state.currentAppId,
     storeAccounts: state.storeAccounts,
     toasts: state.toasts,
+    loaded: state.loaded,
     dispatch,
     addToast,
   };

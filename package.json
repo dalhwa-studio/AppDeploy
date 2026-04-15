@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/check-port.js 5174 && vite",
+    "dev:force": "node scripts/check-port.js 5174 --kill && vite",
     "server": "node server/index.js",
-    "start": "node server/index.js & vite",
+    "start": "node server/index.js & npm run dev",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
