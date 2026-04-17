@@ -102,6 +102,66 @@ function parseJson(text) {
   return JSON.parse(cleaned.slice(start, end + 1));
 }
 
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/**
+ * Parse a rate-limit retry hint from provider error messages.
+ * Returns milliseconds to wait, or null if the error isn't retryable.
+ */
+function parseRetryDelay(err) {
+  const msg = err?.message || '';
+  // Gemini: includes `"retryDelay":"17s"` in the error text
+  const g = msg.match(/retryDelay["\s:]+["']?(\d+(?:\.\d+)?)s/i);
+  if (g) return Math.min(Math.ceil(parseFloat(g[1]) * 1000) + 500, 65000);
+  // Anthropic/OpenAI: 429 via status or generic "rate limit" wording
+  if (err?.status === 429 || /429|rate[\s-]?limit|too many requests|quota/i.test(msg)) {
+    return 15000;
+  }
+  return null;
+}
+
+async function withRetry(fn, { maxAttempts = 3, label = '' } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const delay = parseRetryDelay(err);
+      if (delay == null || attempt === maxAttempts) throw err;
+      console.log(`[ASO Retry${label ? ` ${label}` : ''}] 429 — ${delay}ms 후 재시도 (${attempt}/${maxAttempts})`);
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Run async tasks with a concurrency cap. Preserves input order in the output.
+ */
+async function runWithConcurrency(tasks, limit) {
+  const results = new Array(tasks.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (cursor < tasks.length) {
+      const idx = cursor++;
+      results[idx] = await tasks[idx]();
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+// Burst-safe concurrency per provider. Gemini free tier is 5 req/min so we keep
+// parallelism low and rely on withRetry to absorb per-minute rollovers.
+const PROVIDER_CONCURRENCY = {
+  gemini: 3,
+  openai: 6,
+  anthropic: 6,
+};
+
 function clampToLimits(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -143,24 +203,27 @@ export async function generateForLocales({
   };
   const fn = providerFns[provider] || generateWithAnthropic;
   const resolvedModel = model || DEFAULT_MODELS[provider];
+  const concurrency = PROVIDER_CONCURRENCY[provider] || 3;
 
-  const entries = await Promise.all(
-    targetLocales.map(async (locale) => {
-      try {
-        const system = buildSystemPrompt(store, locale, humanLang(locale));
-        const user = buildUserPrompt({ sourceLocale, sourceMetadata, targetLocale: locale, fields });
-        const result = await fn({ apiKey, system, user, model: resolvedModel });
-        return [locale, {
-          ...clampToLimits(result),
-          generatedAt: new Date().toISOString(),
-          generatedBy: `${provider}:${resolvedModel}`,
-        }];
-      } catch (err) {
-        return [locale, { error: err.message }];
-      }
-    })
-  );
+  const tasks = targetLocales.map(locale => async () => {
+    try {
+      const system = buildSystemPrompt(store, locale, humanLang(locale));
+      const user = buildUserPrompt({ sourceLocale, sourceMetadata, targetLocale: locale, fields });
+      const result = await withRetry(
+        () => fn({ apiKey, system, user, model: resolvedModel }),
+        { maxAttempts: 3, label: locale }
+      );
+      return [locale, {
+        ...clampToLimits(result),
+        generatedAt: new Date().toISOString(),
+        generatedBy: `${provider}:${resolvedModel}`,
+      }];
+    } catch (err) {
+      return [locale, { error: err.message }];
+    }
+  });
 
+  const entries = await runWithConcurrency(tasks, concurrency);
   return Object.fromEntries(entries);
 }
 
