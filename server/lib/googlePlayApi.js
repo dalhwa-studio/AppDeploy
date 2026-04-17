@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import fs from 'fs';
+import { Readable } from 'stream';
 
 export function createClient(serviceAccountJson) {
   const credentials = typeof serviceAccountJson === 'string'
@@ -68,6 +69,40 @@ export async function updateListing(client, packageName, editId, language, { tit
       fullDescription: fullDescription || undefined,
     },
   });
+}
+
+/**
+ * Replace all phone screenshots for a language.
+ * Deletes existing phoneScreenshots, then uploads each new image.
+ *
+ * screenshots: Array<{ buffer: Buffer, fileName: string }>
+ */
+export async function replacePhoneScreenshots(client, packageName, editId, language, screenshots) {
+  await client.edits.images.deleteall({
+    packageName,
+    editId,
+    language,
+    imageType: 'phoneScreenshots',
+  });
+
+  if (!screenshots || screenshots.length === 0) return 0;
+
+  for (const { buffer, fileName } of screenshots) {
+    const mimeType = fileName?.toLowerCase().endsWith('.jpg') || fileName?.toLowerCase().endsWith('.jpeg')
+      ? 'image/jpeg'
+      : 'image/png';
+    await client.edits.images.upload({
+      packageName,
+      editId,
+      language,
+      imageType: 'phoneScreenshots',
+      media: {
+        mimeType,
+        body: Readable.from(buffer),
+      },
+    });
+  }
+  return screenshots.length;
 }
 
 export async function commitEdit(client, packageName, editId) {

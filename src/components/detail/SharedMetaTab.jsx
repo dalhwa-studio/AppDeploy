@@ -331,6 +331,7 @@ export default function SharedMetaTab() {
                         shortDescription: currentApp.googlePlay?.shortDescription,
                         fullDescription: shared.description,
                       },
+                      screenshots: shared.screenshots || [],
                     }),
                   });
                   const result = await res.json();
@@ -366,6 +367,7 @@ export default function SharedMetaTab() {
                         promotionalText: currentApp.appStore?.promotionalText,
                         marketingUrl: currentApp.appStore?.marketingUrl,
                       },
+                      screenshots: shared.screenshots || [],
                     }),
                   });
                   const result = await res.json();

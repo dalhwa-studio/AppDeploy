@@ -201,15 +201,32 @@ export async function getOrCreateVersion(jwt, appId, versionString, platform = '
 }
 
 /**
- * Update version localization (what's new, description, keywords, etc.)
+ * Find an existing version localization or create an empty one, returning its id.
  */
-export async function updateVersionLocalization(jwt, versionId, locale, fields) {
-  // Get existing localizations
+export async function getOrCreateVersionLocalization(jwt, versionId, locale) {
   const locData = await apiRequest(jwt, 'GET',
     `/v1/appStoreVersions/${versionId}/appStoreVersionLocalizations`
   );
+  const existing = locData?.data?.find(l => l.attributes.locale === locale);
+  if (existing) return existing.id;
 
-  let localization = locData?.data?.find(l => l.attributes.locale === locale);
+  const created = await apiRequest(jwt, 'POST', '/v1/appStoreVersionLocalizations', {
+    data: {
+      type: 'appStoreVersionLocalizations',
+      attributes: { locale },
+      relationships: {
+        appStoreVersion: { data: { type: 'appStoreVersions', id: versionId } },
+      },
+    },
+  });
+  return created.data.id;
+}
+
+/**
+ * Update version localization (what's new, description, keywords, etc.)
+ */
+export async function updateVersionLocalization(jwt, versionId, locale, fields) {
+  const localizationId = await getOrCreateVersionLocalization(jwt, versionId, locale);
 
   const attributes = {};
   if (fields.whatsNew) attributes.whatsNew = fields.whatsNew;
@@ -218,32 +235,20 @@ export async function updateVersionLocalization(jwt, versionId, locale, fields) 
   if (fields.promotionalText) attributes.promotionalText = fields.promotionalText;
   if (fields.marketingUrl) attributes.marketingUrl = fields.marketingUrl;
 
-  if (Object.keys(attributes).length === 0) return { updated: [], skipped: [] };
-
-  if (!localization) {
-    // Create new localization — always safe, Apple accepts all fields on creation
-    await apiRequest(jwt, 'POST', '/v1/appStoreVersionLocalizations', {
-      data: {
-        type: 'appStoreVersionLocalizations',
-        attributes: { locale, ...attributes },
-        relationships: {
-          appStoreVersion: { data: { type: 'appStoreVersions', id: versionId } },
-        },
-      },
-    });
-    return { updated: Object.keys(attributes), skipped: [] };
+  if (Object.keys(attributes).length === 0) {
+    return { localizationId, updated: [], skipped: [] };
   }
 
   // Try bulk update first
   try {
-    await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localization.id}`, {
+    await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localizationId}`, {
       data: {
         type: 'appStoreVersionLocalizations',
-        id: localization.id,
+        id: localizationId,
         attributes,
       },
     });
-    return { updated: Object.keys(attributes), skipped: [] };
+    return { localizationId, updated: Object.keys(attributes), skipped: [] };
   } catch (err) {
     // If Apple rejects due to version state (409 STATE_ERROR on a specific attribute),
     // retry each attribute individually so editable fields still go through.
@@ -253,10 +258,10 @@ export async function updateVersionLocalization(jwt, versionId, locale, fields) 
     const skipped = [];
     for (const [key, value] of Object.entries(attributes)) {
       try {
-        await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localization.id}`, {
+        await apiRequest(jwt, 'PATCH', `/v1/appStoreVersionLocalizations/${localizationId}`, {
           data: {
             type: 'appStoreVersionLocalizations',
-            id: localization.id,
+            id: localizationId,
             attributes: { [key]: value },
           },
         });
@@ -266,8 +271,92 @@ export async function updateVersionLocalization(jwt, versionId, locale, fields) 
       }
     }
     if (updated.length === 0) throw err;
-    return { updated, skipped };
+    return { localizationId, updated, skipped };
   }
+}
+
+/**
+ * Replace all screenshots of a given display type for a localization.
+ * Deletes any existing set with the same display type first, then uploads the new ones.
+ *
+ * screenshots: Array<{ buffer: Buffer, fileName: string }>
+ */
+export async function replaceScreenshots(jwt, localizationId, displayType, screenshots, onProgress) {
+  const setsData = await apiRequest(jwt, 'GET',
+    `/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`
+  );
+  for (const set of (setsData?.data || [])) {
+    if (set.attributes?.screenshotDisplayType === displayType) {
+      await apiRequest(jwt, 'DELETE', `/v1/appScreenshotSets/${set.id}`);
+    }
+  }
+
+  if (!screenshots || screenshots.length === 0) return { setId: null, uploaded: 0 };
+
+  const created = await apiRequest(jwt, 'POST', '/v1/appScreenshotSets', {
+    data: {
+      type: 'appScreenshotSets',
+      attributes: { screenshotDisplayType: displayType },
+      relationships: {
+        appStoreVersionLocalization: {
+          data: { type: 'appStoreVersionLocalizations', id: localizationId },
+        },
+      },
+    },
+  });
+  const setId = created.data.id;
+
+  let uploaded = 0;
+  for (let i = 0; i < screenshots.length; i++) {
+    const { buffer, fileName } = screenshots[i];
+    onProgress?.(`스크린샷 ${i + 1}/${screenshots.length} 업로드 중...`);
+    await uploadScreenshot(jwt, setId, buffer, fileName);
+    uploaded++;
+  }
+
+  return { setId, uploaded };
+}
+
+/**
+ * Upload a single screenshot using Apple's 3-step protocol:
+ *  1) Reserve an appScreenshots record (returns S3 uploadOperations)
+ *  2) PUT each chunk to the provided URL
+ *  3) PATCH the record with uploaded:true and sourceFileChecksum (md5)
+ */
+async function uploadScreenshot(jwt, setId, buffer, fileName) {
+  const reservation = await apiRequest(jwt, 'POST', '/v1/appScreenshots', {
+    data: {
+      type: 'appScreenshots',
+      attributes: { fileName, fileSize: buffer.length },
+      relationships: {
+        appScreenshotSet: { data: { type: 'appScreenshotSets', id: setId } },
+      },
+    },
+  });
+  const screenshotId = reservation.data.id;
+  const operations = reservation.data.attributes?.uploadOperations || [];
+
+  for (const op of operations) {
+    const headers = {};
+    for (const h of (op.requestHeaders || [])) headers[h.name] = h.value;
+    const chunk = buffer.subarray(op.offset, op.offset + op.length);
+    const res = await fetch(op.url, { method: op.method, headers, body: chunk });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`스크린샷 업로드 실패 (${res.status}): ${text.slice(0, 200)}`);
+    }
+  }
+
+  const md5 = crypto.createHash('md5').update(buffer).digest('hex');
+  await apiRequest(jwt, 'PATCH', `/v1/appScreenshots/${screenshotId}`, {
+    data: {
+      type: 'appScreenshots',
+      id: screenshotId,
+      attributes: { uploaded: true, sourceFileChecksum: md5 },
+    },
+  });
+
+  return screenshotId;
 }
 
 /**

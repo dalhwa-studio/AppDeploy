@@ -261,14 +261,14 @@ app.post('/api/sync/metadata', (req, res) => {
 
 // ─── Metadata Sync to Store (actual API upload) ───
 app.post('/api/sync/metadata/store', async (req, res) => {
-  const { store, credentialId, packageName, bundleId, metadata, metadataByLocale, defaultLocale, versionString } = req.body;
+  const { store, credentialId, packageName, bundleId, metadata, metadataByLocale, defaultLocale, versionString, screenshots } = req.body;
 
   if (!store || !credentialId) {
     return res.json({ success: false, error: '스토어 타입과 자격증명이 필요합니다.' });
   }
 
   try {
-    const common = { credentialId, metadata, metadataByLocale, defaultLocale, versionString, encryptionKey: ENCRYPTION_KEY };
+    const common = { credentialId, metadata, metadataByLocale, defaultLocale, versionString, screenshots, encryptionKey: ENCRYPTION_KEY };
     let result;
     if (store === 'google_play') {
       result = await syncMetadataToGoogle({ ...common, packageName });
