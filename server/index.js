@@ -8,7 +8,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
-import { saveCredential, loadCredential, findCredentialByType, encrypt, decrypt } from './lib/credentialManager.js';
+import { saveCredential, loadCredential, findCredentialByType, updateCredentialMetadata, encrypt, decrypt } from './lib/credentialManager.js';
 import { deployToGooglePlay, deployToAppStore, getDeploymentStatus } from './lib/deploymentManager.js';
 import { startPolling, stopPolling, getActivePollers } from './lib/statusPoller.js';
 import { syncMetadataToGoogle, syncMetadataToApple } from './lib/metadataSync.js';
@@ -261,14 +261,24 @@ app.post('/api/sync/metadata', (req, res) => {
 
 // ─── Metadata Sync to Store (actual API upload) ───
 app.post('/api/sync/metadata/store', async (req, res) => {
-  const { store, credentialId, packageName, bundleId, metadata, metadataByLocale, defaultLocale, versionString, screenshots } = req.body;
+  const { store, credentialId, packageName, bundleId, metadata, metadataByLocale, defaultLocale, versionString, screenshots, socketId } = req.body;
 
   if (!store || !credentialId) {
     return res.json({ success: false, error: '스토어 타입과 자격증명이 필요합니다.' });
   }
 
+  const syncId = crypto.randomUUID();
+  const emit = (event, payload) => {
+    if (io && socketId) io.to(socketId).emit(event, { syncId, ...payload });
+  };
+  const onLog = (level, message) => {
+    emit('sync:log', { level, message, timestamp: new Date().toISOString() });
+  };
+
+  emit('sync:start', { store, timestamp: new Date().toISOString() });
+
   try {
-    const common = { credentialId, metadata, metadataByLocale, defaultLocale, versionString, screenshots, encryptionKey: ENCRYPTION_KEY };
+    const common = { credentialId, metadata, metadataByLocale, defaultLocale, versionString, screenshots, encryptionKey: ENCRYPTION_KEY, onLog };
     let result;
     if (store === 'google_play') {
       result = await syncMetadataToGoogle({ ...common, packageName });
@@ -278,20 +288,22 @@ app.post('/api/sync/metadata/store', async (req, res) => {
       return res.json({ success: false, error: '지원하지 않는 스토어 타입입니다.' });
     }
 
-    res.json({ success: true, ...result });
+    emit('sync:complete', { store, message: result.message });
+    res.json({ success: true, syncId, ...result });
   } catch (err) {
     console.error('[Metadata Store Sync Error]', err);
-    res.json({ success: false, error: err.message });
+    emit('sync:error', { store, error: err.message });
+    res.json({ success: false, syncId, error: err.message });
   }
 });
 
 // ─── LLM Credential (Anthropic / OpenAI API Key) ───
 app.post('/api/llm-credential', (req, res) => {
-  const { provider, apiKey } = req.body;
+  const { provider, apiKey, model } = req.body;
   if (!provider || !apiKey) {
     return res.json({ success: false, error: 'provider와 apiKey가 필요합니다.' });
   }
-  if (!['anthropic', 'openai'].includes(provider)) {
+  if (!['anthropic', 'openai', 'gemini'].includes(provider)) {
     return res.json({ success: false, error: '지원하지 않는 provider입니다.' });
   }
   try {
@@ -305,10 +317,27 @@ app.post('/api/llm-credential', (req, res) => {
       }
     } catch {}
     const credentialId = saveCredential(
-      { storeType: `llm_${provider}`, fileName: `${provider}.key`, fileContent: apiKey, metadata: { provider } },
+      { storeType: `llm_${provider}`, fileName: `${provider}.key`, fileContent: apiKey, metadata: { provider, model: model || null } },
       ENCRYPTION_KEY
     );
-    res.json({ success: true, credentialId, provider });
+    res.json({ success: true, credentialId, provider, model: model || null });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// PATCH model without re-entering key
+app.patch('/api/llm-credential/:provider', (req, res) => {
+  const { provider } = req.params;
+  const { model } = req.body;
+  if (!['anthropic', 'openai', 'gemini'].includes(provider)) {
+    return res.json({ success: false, error: '지원하지 않는 provider입니다.' });
+  }
+  try {
+    const existing = findCredentialByType(`llm_${provider}`);
+    if (!existing) return res.json({ success: false, error: '연결된 자격증명이 없습니다.' });
+    const metadata = updateCredentialMetadata(existing.id, { model: model || null });
+    res.json({ success: true, metadata });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
@@ -316,12 +345,15 @@ app.post('/api/llm-credential', (req, res) => {
 
 app.get('/api/llm-credential', (req, res) => {
   try {
+    const shape = (c) => c ? { credentialId: c.id, createdAt: c.createdAt, model: c.metadata?.model || null } : null;
     const anth = findCredentialByType('llm_anthropic');
     const oai = findCredentialByType('llm_openai');
+    const gem = findCredentialByType('llm_gemini');
     res.json({
       success: true,
-      anthropic: anth ? { credentialId: anth.id, createdAt: anth.createdAt } : null,
-      openai: oai ? { credentialId: oai.id, createdAt: oai.createdAt } : null,
+      anthropic: shape(anth),
+      openai: shape(oai),
+      gemini: shape(gem),
     });
   } catch (err) {
     res.json({ success: false, error: err.message });
@@ -359,6 +391,7 @@ app.post('/api/metadata/generate-aso', async (req, res) => {
     const results = await generateForLocales({
       provider,
       apiKey,
+      model: cred.metadata?.model || null,
       store: store || 'both',
       sourceLocale: sourceLocale || 'ko-KR',
       sourceMetadata,

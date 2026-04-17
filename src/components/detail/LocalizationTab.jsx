@@ -1,12 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Globe, Sparkles, Languages, Plus, X, RefreshCw, Upload,
-  CheckCircle2, AlertCircle, Edit3, PlayCircle, Apple
+  CheckCircle2, AlertCircle, Edit3, PlayCircle, Apple,
+  Image as ImageIcon, RotateCcw
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import { API_BASE, FIELD_LIMITS } from '../../utils/constants';
 import { LOCALE_PRESETS, DEFAULT_LOCALE, getLocaleLabel } from '../../utils/locales';
 import CharCounter from '../common/CharCounter';
+import SyncLogPanel, { useSyncLog } from '../common/SyncLogPanel';
 
 const EDITABLE_FIELDS = [
   { key: 'title', label: 'Title', limit: FIELD_LIMITS.appName, rows: 1 },
@@ -21,10 +23,26 @@ const EDITABLE_FIELDS = [
 export default function LocalizationTab() {
   const { currentApp, dispatch, addToast, storeAccounts } = useApp();
   const [provider, setProvider] = useState('anthropic');
+  const [llmStatus, setLlmStatus] = useState({ anthropic: null, openai: null, gemini: null });
   const [customLocale, setCustomLocale] = useState('');
   const [generating, setGenerating] = useState({});
   const [syncing, setSyncing] = useState(false);
   const [editingLocale, setEditingLocale] = useState(null);
+  const { socketId, logs, isActive, clear } = useSyncLog();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/llm-credential`)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled || !data.success) return;
+        const status = { anthropic: data.anthropic, openai: data.openai, gemini: data.gemini };
+        setLlmStatus(status);
+        setProvider(prev => (status[prev] ? prev : (['anthropic', 'openai', 'gemini'].find(p => status[p]) || prev)));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   if (!currentApp) return null;
 
@@ -162,6 +180,49 @@ export default function LocalizationTab() {
     });
   };
 
+  const setLocaleScreenshots = (locale, screenshots) => {
+    const current = localesData[locale] || {};
+    updateField('locales', {
+      ...localesData,
+      [locale]: { ...current, screenshots },
+    });
+  };
+
+  const handleLocaleScreenshotUpload = (locale, e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    const next = [...((localesData[locale]?.screenshots) || [])];
+    let loaded = 0;
+    files.forEach(file => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        next.push({
+          id: crypto.randomUUID(),
+          dataUrl: ev.target.result,
+          fileName: file.name,
+        });
+        loaded++;
+        if (loaded === files.length) {
+          setLocaleScreenshots(locale, next);
+          addToast(`${getLocaleLabel(locale)}에 ${loaded}장 추가됨`, 'success');
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const removeLocaleScreenshot = (locale, id) => {
+    const current = localesData[locale]?.screenshots || [];
+    setLocaleScreenshots(locale, current.filter(s => s.id !== id));
+  };
+
+  const resetLocaleScreenshots = (locale) => {
+    setLocaleScreenshots(locale, []);
+    addToast(`${getLocaleLabel(locale)} 스크린샷을 shared로 되돌렸습니다.`, 'success');
+  };
+
   const syncToStore = async (store) => {
     const connected = store === 'google_play' ? storeAccounts.googlePlay : storeAccounts.appStore;
     if (!connected) {
@@ -169,12 +230,16 @@ export default function LocalizationTab() {
       return;
     }
 
+    const sharedShots = shared.screenshots || [];
+    const pickShots = (localeShots) =>
+      (Array.isArray(localeShots) && localeShots.length > 0) ? localeShots : sharedShots;
+
     const metadataByLocale = {
-      [defaultLocale]: sourceMetadata,
+      [defaultLocale]: { ...sourceMetadata, screenshots: sharedShots },
       ...Object.fromEntries(
         targetLocales
           .filter(l => localesData[l] && !localesData[l].error)
-          .map(l => [l, localesData[l]])
+          .map(l => [l, { ...localesData[l], screenshots: pickShots(localesData[l]?.screenshots) }])
       ),
     };
     if (Object.keys(metadataByLocale).length === 0) {
@@ -195,6 +260,7 @@ export default function LocalizationTab() {
           metadataByLocale,
           defaultLocale,
           versionString: shared.versionName || '1.0.0',
+          socketId,
         }),
       });
       const data = await res.json();
@@ -221,11 +287,13 @@ export default function LocalizationTab() {
               onChange={e => setProvider(e.target.value)}
               style={{ padding: '6px 10px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
             >
-              <option value="anthropic">Anthropic Claude</option>
-              <option value="openai">OpenAI GPT</option>
+              <option value="anthropic">Anthropic Claude {llmStatus.anthropic ? '✓' : '(미연결)'}</option>
+              <option value="openai">OpenAI GPT {llmStatus.openai ? '✓' : '(미연결)'}</option>
+              <option value="gemini">Google Gemini (무료) {llmStatus.gemini ? '✓' : '(미연결)'}</option>
             </select>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              기본 언어: <strong>{getLocaleLabel(defaultLocale)}</strong> · 설정 → AI 서비스에서 API Key를 먼저 등록하세요.
+            <div style={{ fontSize: '0.75rem', color: llmStatus[provider] ? 'var(--text-muted)' : 'var(--color-warning)' }}>
+              기본 언어: <strong>{getLocaleLabel(defaultLocale)}</strong>
+              {!llmStatus[provider] && <> · ⚠ 선택한 provider에 API Key가 설정되지 않았습니다 (설정 → AI 서비스)</>}
             </div>
           </div>
         </div>
@@ -378,6 +446,97 @@ export default function LocalizationTab() {
                     </div>
                   );
                 })}
+
+                {/* Per-locale screenshots */}
+                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 'var(--space-md)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--space-sm)' }}>
+                    <ImageIcon size={16} className="icon" />
+                    <strong style={{ fontSize: '0.875rem' }}>스크린샷</strong>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      (이 로케일 전용. 비워두면 shared 사용)
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const localeShots = localesData[editingLocale]?.screenshots || [];
+                    const sharedCount = (shared.screenshots || []).length;
+                    const inputId = `loc-ss-upload-${editingLocale}`;
+
+                    if (localeShots.length === 0) {
+                      return (
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 12,
+                          padding: 'var(--space-md)',
+                          background: 'var(--bg-input)',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px dashed var(--border-subtle)',
+                        }}>
+                          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', flex: 1 }}>
+                            shared 스크린샷 사용 중 <strong>({sharedCount}장)</strong>
+                          </div>
+                          <label htmlFor={inputId} className="btn btn-secondary btn-sm" style={{ cursor: 'pointer' }}>
+                            <Upload size={14} /> 이 로케일 전용 업로드
+                          </label>
+                          <input
+                            id={inputId}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            style={{ display: 'none' }}
+                            onChange={e => handleLocaleScreenshotUpload(editingLocale, e)}
+                          />
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 'var(--space-sm)' }}>
+                          {localeShots.map(s => (
+                            <div key={s.id} style={{ position: 'relative', width: 100, height: 180, borderRadius: 'var(--radius-sm)', overflow: 'hidden', background: 'var(--bg-input)', border: '1px solid var(--border-subtle)' }}>
+                              <img src={s.dataUrl} alt={s.fileName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              <button
+                                onClick={() => removeLocaleScreenshot(editingLocale, s.id)}
+                                style={{
+                                  position: 'absolute', top: 4, right: 4,
+                                  background: 'rgba(0,0,0,0.7)', border: 'none',
+                                  color: '#fff', borderRadius: '50%',
+                                  width: 20, height: 20, cursor: 'pointer',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                }}
+                                title="삭제"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          ))}
+                          <label htmlFor={inputId} style={{
+                            width: 100, height: 180, borderRadius: 'var(--radius-sm)',
+                            border: '2px dashed var(--border-subtle)', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: 'var(--text-muted)',
+                          }}>
+                            <Plus size={24} />
+                          </label>
+                          <input
+                            id={inputId}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            style={{ display: 'none' }}
+                            onChange={e => handleLocaleScreenshotUpload(editingLocale, e)}
+                          />
+                        </div>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => resetLocaleScreenshots(editingLocale)}
+                        >
+                          <RotateCcw size={14} /> shared로 되돌리기 ({sharedCount}장)
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             </div>
           )}
@@ -420,6 +579,7 @@ export default function LocalizationTab() {
               {syncing === 'app_store' ? '동기화 중...' : 'App Store에 동기화'}
             </button>
           </div>
+          <SyncLogPanel logs={logs} isActive={isActive} onClear={clear} />
         </div>
       </div>
     </div>

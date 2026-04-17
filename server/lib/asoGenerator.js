@@ -1,5 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+export const DEFAULT_MODELS = {
+  anthropic: 'claude-sonnet-4-5',
+  openai: 'gpt-4o',
+  gemini: 'gemini-2.5-flash',
+};
 
 const FIELD_LIMITS = {
   title: 30,
@@ -49,10 +56,10 @@ Required fields: ${fields.join(', ')}
 Return a single JSON object with exactly these keys: ${fields.map(f => `"${f}"`).join(', ')}.`;
 }
 
-async function generateWithAnthropic({ apiKey, system, user }) {
+async function generateWithAnthropic({ apiKey, system, user, model }) {
   const client = new Anthropic({ apiKey });
   const res = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: model || DEFAULT_MODELS.anthropic,
     max_tokens: 4096,
     system,
     messages: [{ role: 'user', content: user }],
@@ -61,10 +68,10 @@ async function generateWithAnthropic({ apiKey, system, user }) {
   return parseJson(text);
 }
 
-async function generateWithOpenAI({ apiKey, system, user }) {
+async function generateWithOpenAI({ apiKey, system, user, model }) {
   const client = new OpenAI({ apiKey });
   const res = await client.chat.completions.create({
-    model: 'gpt-4o',
+    model: model || DEFAULT_MODELS.openai,
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: system },
@@ -72,6 +79,18 @@ async function generateWithOpenAI({ apiKey, system, user }) {
     ],
   });
   const text = res.choices?.[0]?.message?.content || '{}';
+  return parseJson(text);
+}
+
+async function generateWithGemini({ apiKey, system, user, model }) {
+  const client = new GoogleGenerativeAI(apiKey);
+  const genModel = client.getGenerativeModel({
+    model: model || DEFAULT_MODELS.gemini,
+    systemInstruction: system,
+    generationConfig: { responseMimeType: 'application/json' },
+  });
+  const res = await genModel.generateContent(user);
+  const text = res?.response?.text?.() || '{}';
   return parseJson(text);
 }
 
@@ -96,7 +115,7 @@ function clampToLimits(obj) {
  * Generate translated + ASO-optimized metadata for multiple target locales in parallel.
  *
  * @param {object} opts
- * @param {string} opts.provider - 'anthropic' | 'openai'
+ * @param {string} opts.provider - 'anthropic' | 'openai' | 'gemini'
  * @param {string} opts.apiKey
  * @param {string} opts.store - 'app_store' | 'google_play' | 'both'
  * @param {string} opts.sourceLocale - e.g. 'ko-KR'
@@ -107,6 +126,7 @@ function clampToLimits(obj) {
 export async function generateForLocales({
   provider,
   apiKey,
+  model,
   store,
   sourceLocale,
   sourceMetadata,
@@ -116,18 +136,24 @@ export async function generateForLocales({
   if (!targetLocales?.length) return {};
 
   const fields = STORE_FIELDS[store] || STORE_FIELDS.both;
-  const fn = provider === 'openai' ? generateWithOpenAI : generateWithAnthropic;
+  const providerFns = {
+    anthropic: generateWithAnthropic,
+    openai: generateWithOpenAI,
+    gemini: generateWithGemini,
+  };
+  const fn = providerFns[provider] || generateWithAnthropic;
+  const resolvedModel = model || DEFAULT_MODELS[provider];
 
   const entries = await Promise.all(
     targetLocales.map(async (locale) => {
       try {
         const system = buildSystemPrompt(store, locale, humanLang(locale));
         const user = buildUserPrompt({ sourceLocale, sourceMetadata, targetLocale: locale, fields });
-        const result = await fn({ apiKey, system, user });
+        const result = await fn({ apiKey, system, user, model: resolvedModel });
         return [locale, {
           ...clampToLimits(result),
           generatedAt: new Date().toISOString(),
-          generatedBy: provider,
+          generatedBy: `${provider}:${resolvedModel}`,
         }];
       } catch (err) {
         return [locale, { error: err.message }];

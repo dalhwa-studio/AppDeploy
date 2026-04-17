@@ -6,6 +6,24 @@ import {
 import { useApp } from '../hooks/useAppContext';
 import { API_BASE } from '../utils/constants';
 
+const MODEL_PRESETS = {
+  anthropic: [
+    { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 — 최고 품질' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — 균형 (추천)' },
+    { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 — 저렴/빠름' },
+  ],
+  openai: [
+    { value: 'gpt-4o', label: 'GPT-4o — 균형 (추천)' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o mini — 저렴' },
+    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+  ],
+  gemini: [
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — 고품질' },
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — 무료 티어 넉넉 (추천)' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — 안정' },
+  ],
+};
+
 export default function SettingsPage() {
   const { apps, storeAccounts, dispatch, addToast } = useApp();
   const [serverHealth, setServerHealth] = useState(null);
@@ -13,35 +31,44 @@ export default function SettingsPage() {
   const fileInputRef = useRef(null);
 
   // ─── LLM credential state ───
-  const [llmStatus, setLlmStatus] = useState({ anthropic: null, openai: null });
-  const [llmProvider, setLlmProvider] = useState('anthropic');
-  const [llmKey, setLlmKey] = useState('');
-  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmStatus, setLlmStatus] = useState({ anthropic: null, openai: null, gemini: null });
+  const [llmKeys, setLlmKeys] = useState({ anthropic: '', openai: '', gemini: '' });
+  const [llmModels, setLlmModels] = useState({ anthropic: '', openai: '', gemini: '' });
+  const [llmSavingProvider, setLlmSavingProvider] = useState(null);
 
   const loadLlmStatus = async () => {
     try {
       const res = await fetch(`${API_BASE}/llm-credential`);
       const data = await res.json();
-      if (data.success) setLlmStatus({ anthropic: data.anthropic, openai: data.openai });
+      if (data.success) {
+        setLlmStatus({ anthropic: data.anthropic, openai: data.openai, gemini: data.gemini });
+        setLlmModels(prev => ({
+          anthropic: data.anthropic?.model || prev.anthropic,
+          openai: data.openai?.model || prev.openai,
+          gemini: data.gemini?.model || prev.gemini,
+        }));
+      }
     } catch {}
   };
 
-  const saveLlmKey = async () => {
-    if (!llmKey.trim()) {
+  const saveLlmKey = async (provider) => {
+    const key = (llmKeys[provider] || '').trim();
+    if (!key) {
       addToast('API Key를 입력해 주세요.', 'warning');
       return;
     }
-    setLlmSaving(true);
+    setLlmSavingProvider(provider);
     try {
       const res = await fetch(`${API_BASE}/llm-credential`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: llmProvider, apiKey: llmKey.trim() }),
+        body: JSON.stringify({ provider, apiKey: key, model: llmModels[provider] || null }),
       });
       const data = await res.json();
       if (data.success) {
-        addToast(`${llmProvider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API Key가 안전하게 저장되었습니다.`, 'success');
-        setLlmKey('');
+        const label = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini' }[provider] || provider;
+        addToast(`${label} API Key가 안전하게 저장되었습니다.`, 'success');
+        setLlmKeys(prev => ({ ...prev, [provider]: '' }));
         await loadLlmStatus();
       } else {
         addToast(`저장 실패: ${data.error}`, 'error');
@@ -49,11 +76,29 @@ export default function SettingsPage() {
     } catch (err) {
       addToast(`서버 연결 실패: ${err.message}`, 'error');
     }
-    setLlmSaving(false);
+    setLlmSavingProvider(null);
+  };
+
+  const updateLlmModel = async (provider, model) => {
+    setLlmModels(prev => ({ ...prev, [provider]: model }));
+    if (!llmStatus[provider]) return; // not connected yet; just remember locally
+    try {
+      const res = await fetch(`${API_BASE}/llm-credential/${provider}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      const data = await res.json();
+      if (data.success) addToast('모델이 변경되었습니다.', 'success');
+      else addToast(`변경 실패: ${data.error}`, 'error');
+    } catch (err) {
+      addToast(`서버 연결 실패: ${err.message}`, 'error');
+    }
   };
 
   const removeLlmKey = async (provider) => {
-    if (!window.confirm(`${provider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API Key를 삭제하시겠습니까?`)) return;
+    const label = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini' }[provider] || provider;
+    if (!window.confirm(`${label} API Key를 삭제하시겠습니까?`)) return;
     try {
       const res = await fetch(`${API_BASE}/llm-credential/${provider}`, { method: 'DELETE' });
       const data = await res.json();
@@ -258,61 +303,93 @@ export default function SettingsPage() {
                 API Key는 서버에 AES-256-GCM으로 암호화 저장됩니다.
               </div>
 
-              {/* Anthropic status */}
-              <div className="flex items-center gap-sm" style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>Anthropic Claude</div>
-                  {llmStatus.anthropic ? (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
-                      연결됨 · {new Date(llmStatus.anthropic.createdAt).toLocaleString('ko-KR')}
+              {[
+                { id: 'anthropic', label: 'Anthropic Claude', placeholder: 'sk-ant-...', hint: null },
+                { id: 'openai', label: 'OpenAI GPT', placeholder: 'sk-...', hint: null },
+                {
+                  id: 'gemini',
+                  label: 'Google Gemini',
+                  placeholder: 'AIza...',
+                  badge: '무료 티어',
+                  hint: (
+                    <>
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--color-primary)' }}>aistudio.google.com</a>
+                      {' '}에서 무료 발급 가능
+                    </>
+                  ),
+                },
+              ].map(p => {
+                const connected = llmStatus[p.id];
+                const saving = llmSavingProvider === p.id;
+                return (
+                  <div key={p.id} style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                    <div className="flex items-center gap-sm" style={{ marginBottom: connected ? 0 : 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>
+                          {p.label}
+                          {p.badge && (
+                            <span style={{ fontSize: '0.7rem', color: 'var(--color-success)', marginLeft: 6 }}>
+                              ({p.badge})
+                            </span>
+                          )}
+                        </div>
+                        {connected ? (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
+                            연결됨 · {new Date(connected.createdAt).toLocaleString('ko-KR')}
+                          </div>
+                        ) : p.hint ? (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{p.hint}</div>
+                        ) : null}
+                      </div>
+                      {connected && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => removeLlmKey(p.id)}>삭제</button>
+                      )}
                     </div>
-                  ) : (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>미연결</div>
-                  )}
-                </div>
-                {llmStatus.anthropic && (
-                  <button className="btn btn-ghost btn-sm" onClick={() => removeLlmKey('anthropic')}>삭제</button>
-                )}
-              </div>
+                    {!connected && (
+                      <div className="flex items-center gap-sm" style={{ flexWrap: 'wrap' }}>
+                        <input
+                          type="password"
+                          placeholder={p.placeholder}
+                          value={llmKeys[p.id] || ''}
+                          onChange={e => setLlmKeys(prev => ({ ...prev, [p.id]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && saveLlmKey(p.id)}
+                          style={{ flex: 1, minWidth: 200, fontFamily: 'var(--font-mono)', fontSize: '0.8125rem' }}
+                        />
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => saveLlmKey(p.id)}
+                          disabled={saving}
+                        >
+                          {saving ? '저장 중...' : '저장'}
+                        </button>
+                      </div>
+                    )}
 
-              {/* OpenAI status */}
-              <div className="flex items-center gap-sm" style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>OpenAI GPT</div>
-                  {llmStatus.openai ? (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
-                      연결됨 · {new Date(llmStatus.openai.createdAt).toLocaleString('ko-KR')}
+                    {/* Model selector (visible always; PATCHes on change when connected) */}
+                    <div className="flex items-center gap-sm" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', minWidth: 40 }}>모델</label>
+                      <select
+                        value={llmModels[p.id] || ''}
+                        onChange={e => updateLlmModel(p.id, e.target.value || null)}
+                        style={{ flex: 1, minWidth: 200, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontSize: '0.8125rem' }}
+                      >
+                        <option value="">기본값 사용</option>
+                        {MODEL_PRESETS[p.id]?.map(m => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="또는 직접 입력"
+                        value={llmModels[p.id] || ''}
+                        onChange={e => setLlmModels(prev => ({ ...prev, [p.id]: e.target.value }))}
+                        onBlur={e => connected && updateLlmModel(p.id, e.target.value || null)}
+                        style={{ width: 140, fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}
+                      />
                     </div>
-                  ) : (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>미연결</div>
-                  )}
-                </div>
-                {llmStatus.openai && (
-                  <button className="btn btn-ghost btn-sm" onClick={() => removeLlmKey('openai')}>삭제</button>
-                )}
-              </div>
-
-              {/* Add / update key */}
-              <div className="flex items-center gap-sm" style={{ flexWrap: 'wrap' }}>
-                <select
-                  value={llmProvider}
-                  onChange={e => setLlmProvider(e.target.value)}
-                  style={{ padding: '6px 10px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
-                >
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
-                </select>
-                <input
-                  type="password"
-                  placeholder={llmProvider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
-                  value={llmKey}
-                  onChange={e => setLlmKey(e.target.value)}
-                  style={{ flex: 1, minWidth: 200, fontFamily: 'var(--font-mono)', fontSize: '0.8125rem' }}
-                />
-                <button className="btn btn-primary btn-sm" onClick={saveLlmKey} disabled={llmSaving}>
-                  {llmSaving ? '저장 중...' : '저장'}
-                </button>
-              </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

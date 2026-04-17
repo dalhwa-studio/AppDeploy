@@ -162,7 +162,7 @@ export const DEFAULT_APP = {
   // ─── Localization ───
   defaultLocale: 'ko-KR',
   targetLocales: [],           // e.g. ['en-US','ja-JP']
-  locales: {},                 // { 'en-US': { title, subtitle, description, keywords, promotionalText, whatsNew, shortDescription, generatedAt, generatedBy, edited } }
+  locales: {},                 // { 'en-US': { title, subtitle, description, keywords, promotionalText, whatsNew, shortDescription, screenshots, generatedAt, generatedBy, edited } } — screenshots 비어있으면 shared.screenshots 로 폴백
   createdAt: null,
   updatedAt: null,
 };

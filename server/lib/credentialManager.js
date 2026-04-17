@@ -65,3 +65,19 @@ export function findCredentialByType(storeType) {
   }
   return null;
 }
+
+/**
+ * Patch the metadata of an existing credential without re-encrypting the key.
+ * Used to update user-editable config (e.g. the model to use) without requiring
+ * the user to re-enter their API key.
+ */
+export function updateCredentialMetadata(credentialId, patch) {
+  const credPath = path.join(KEYS_DIR, `${credentialId}.enc`);
+  if (!fs.existsSync(credPath)) {
+    throw new Error(`자격증명을 찾을 수 없습니다: ${credentialId}`);
+  }
+  const data = JSON.parse(fs.readFileSync(credPath, 'utf-8'));
+  data.metadata = { ...(data.metadata || {}), ...patch };
+  fs.writeFileSync(credPath, JSON.stringify(data));
+  return data.metadata;
+}

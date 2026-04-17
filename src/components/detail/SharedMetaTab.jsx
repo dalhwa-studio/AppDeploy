@@ -5,12 +5,14 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../hooks/useAppContext';
 import CharCounter from '../common/CharCounter';
+import SyncLogPanel, { useSyncLog } from '../common/SyncLogPanel';
 import { FIELD_LIMITS, CATEGORIES, API_BASE } from '../../utils/constants';
 
 export default function SharedMetaTab() {
   const { currentApp, dispatch, addToast, storeAccounts } = useApp();
   const shared = currentApp?.shared || {};
   const [syncing, setSyncing] = useState(null);
+  const { socketId, logs, isActive, clear } = useSyncLog();
 
   const updateField = useCallback((path, value) => {
     dispatch({
@@ -332,6 +334,7 @@ export default function SharedMetaTab() {
                         fullDescription: shared.description,
                       },
                       screenshots: shared.screenshots || [],
+                      socketId,
                     }),
                   });
                   const result = await res.json();
@@ -368,6 +371,7 @@ export default function SharedMetaTab() {
                         marketingUrl: currentApp.appStore?.marketingUrl,
                       },
                       screenshots: shared.screenshots || [],
+                      socketId,
                     }),
                   });
                   const result = await res.json();
@@ -388,6 +392,7 @@ export default function SharedMetaTab() {
               </span>
             )}
           </div>
+          <SyncLogPanel logs={logs} isActive={isActive} onClear={clear} />
         </div>
       </div>
     </div>
