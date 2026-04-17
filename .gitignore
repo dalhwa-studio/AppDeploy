@@ -23,6 +23,9 @@ Thumbs.db
 .appdeploy_keys/
 .appdeploy_sync/
 .appdeploy_builds/
+.appdeploy_apikeys/
+.appdeploy_data/
+.appdeploy_history/
 
 # Logs
 logs/
